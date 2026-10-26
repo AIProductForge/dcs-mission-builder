@@ -1,0 +1,6 @@
+{
+  "dcs_dir": "C:\Program Files\Eagle Dynamics\DCS World",
+  "output_dir": "%USERPROFILE%\Saved Games\DCS\Missions\Generated",
+  "liberation_payloads": "%USERPROFILE%\Saved Games\dcs_liberation\resources\customized_payloads",
+  "port": 8765
+}

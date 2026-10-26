@@ -1,0 +1,11 @@
+# local Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# per-machine settings and logs
+config.json
+mission_builder.log
+
+# generated missions
+*.miz

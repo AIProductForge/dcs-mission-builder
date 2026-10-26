@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Briefing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Stardos+Stencil:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<aside class="tasking" aria-label="Mission parameters">
+  <header class="tasking-head">
+    <div class="tasking-kicker">DCS MISSION BUILDER</div>
+    <h1>Tasking</h1>
+    <p class="tasking-hint">Change any field to pin it <span class="lock-inline" aria-hidden="true">●</span>. Generate rerolls everything that isn't pinned.</p>
+  </header>
+  <form id="form" autocomplete="off" onsubmit="return false">
+    <div class="field" data-field="aircraft"><label for="f-aircraft">Aircraft</label><select id="f-aircraft"></select></div>
+    <div class="field" data-field="terrain"><label for="f-terrain">Theatre</label><select id="f-terrain"></select></div>
+    <div class="field" data-field="airport"><label for="f-airport">Home field</label><select id="f-airport"></select></div>
+    <div class="field" data-field="mission_type"><label for="f-mission_type">Mission</label><select id="f-mission_type"></select></div>
+    <div class="field" data-field="start"><label for="f-start">Start</label><select id="f-start"></select></div>
+    <div class="field" data-field="flight_size"><label for="f-flight_size">Flight size</label>
+      <select id="f-flight_size"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+    <div class="field" data-field="date"><label for="f-date">Date</label><input id="f-date" type="date" min="1940-01-01" max="2040-12-31"></div>
+    <div class="field" data-field="hour"><label for="f-hour">Start hour (local)</label>
+      <select id="f-hour"></select></div>
+    <div class="field" data-field="weather"><label for="f-weather">Weather</label><select id="f-weather"></select></div>
+    <div class="field" data-field="enemy_skill"><label for="f-enemy_skill">Enemy skill</label><select id="f-enemy_skill"></select></div>
+    <div class="field check" data-field="awacs"><label for="f-awacs">AWACS</label><input id="f-awacs" type="checkbox"></div>
+    <div class="field check" data-field="tanker"><label for="f-tanker">Tanker</label><input id="f-tanker" type="checkbox"></div>
+  </form>
+  <div class="actions">
+    <button id="btn-generate" class="btn primary" type="button">Generate</button>
+    <button id="btn-apply" class="btn" type="button" title="Rebuild with exactly these values (same layout)">Apply edits</button>
+    <button id="btn-unlock" class="btn ghost" type="button">Unpin all</button>
+    <button id="btn-save" class="btn save" type="button" disabled>Save .miz</button>
+  </div>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+</aside>
+
+<main class="desk">
+  <article class="doc" id="doc" aria-live="polite">
+    <div class="banner">UNCLASSIFIED // EXERCISE ONLY</div>
+    <div class="doc-body">
+      <div class="stamp" aria-hidden="true">EXERCISE</div>
+      <header class="doc-head">
+        <div class="doc-title">
+          <div class="doc-kind">MISSION BRIEFING</div>
+          <div class="doc-op">OPERATION <span id="b-codename">—</span></div>
+        </div>
+        <table class="meta">
+          <tr><th>MSN NO</th><td id="b-msn">—</td><th>DTG</th><td id="b-dtg">—</td></tr>
+          <tr><th>THEATRE</th><td id="b-theatre">—</td><th>FLIGHT</th><td id="b-flight">—</td></tr>
+          <tr><th>AIRCRAFT</th><td id="b-aircraft">—</td><th>TASK</th><td id="b-task">—</td></tr>
+        </table>
+      </header>
+
+      <section>
+        <h2><span class="num">1.</span> Situation</h2>
+        <div class="sub"><span class="lbl">a. Enemy forces.</span> <span id="b-enemy"></span></div>
+        <div class="sub"><span class="lbl">b. Friendly forces.</span> <span id="b-friendly"></span></div>
+        <div class="sub"><span class="lbl">c. Weather.</span> <span id="b-weather"></span></div>
+      </section>
+
+      <section>
+        <h2><span class="num">2.</span> Mission</h2>
+        <p class="mission-statement" id="b-mission"></p>
+      </section>
+
+      <section>
+        <h2><span class="num">3.</span> Execution</h2>
+        <div class="sub"><span class="lbl">a. Route.</span> Bearings are true. Distances are leg lengths.</div>
+        <table class="grid" id="b-route">
+          <thead><tr><th>WP</th><th>Name</th><th>Position</th><th>Brg °T</th><th>Dist nm</th><th>Alt ft</th><th>Spd kt</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="sub"><span class="lbl">b. Loadout.</span> <span id="b-loadout"></span></div>
+        <figure class="map-fig">
+          <div id="map" class="map" role="img" aria-label="Route and threat map"></div>
+          <figcaption><span>Fig. 1 — Route, objective and threat overview.</span>
+            <span class="legend">
+              <span class="lg route"></span>Route
+              <span class="lg threat"></span>Threat ring
+              <span class="lg air"></span>Enemy air
+              <span class="lg support"></span>Support track
+            </span></figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2><span class="num">4.</span> Threats</h2>
+        <table class="grid" id="b-threats">
+          <thead><tr><th>Threat</th><th>Type</th><th>Position</th><th>Ring nm</th><th>Remarks</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2><span class="num">5.</span> Support</h2>
+        <table class="grid" id="b-support">
+          <thead><tr><th>Role</th><th>Callsign</th><th>Type</th><th>Freq</th><th>TACAN</th><th>Alt ft</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2><span class="num">6.</span> Command &amp; signal</h2>
+        <table class="grid kv" id="b-signal"><tbody></tbody></table>
+      </section>
+
+      <section id="notes-section">
+        <h2><span class="num">7.</span> Remarks</h2>
+        <ul id="b-notes"></ul>
+      </section>
+
+      <footer class="doc-foot"><span>PREPARED BY: DCS MISSION BUILDER</span><span id="b-file">NOT YET SAVED</span></footer>
+    </div>
+    <div class="banner">UNCLASSIFIED // EXERCISE ONLY</div>
+  </article>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
