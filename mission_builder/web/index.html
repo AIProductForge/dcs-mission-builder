@@ -22,6 +22,7 @@
     <div class="field" data-field="terrain"><label for="f-terrain">Theatre</label><select id="f-terrain"></select></div>
     <div class="field" data-field="airport"><label for="f-airport">Home field</label><select id="f-airport"></select></div>
     <div class="field" data-field="mission_type"><label for="f-mission_type">Mission</label><select id="f-mission_type"></select></div>
+    <div class="field" data-field="loadout"><label for="f-loadout">Loadout</label><select id="f-loadout"></select></div>
     <div class="field" data-field="start"><label for="f-start">Start</label><select id="f-start"></select></div>
     <div class="field" data-field="flight_size"><label for="f-flight_size">Flight size</label>
       <select id="f-flight_size"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
@@ -78,7 +79,8 @@
           <thead><tr><th>WP</th><th>Name</th><th>Position</th><th>Brg °T</th><th>Dist nm</th><th>Alt ft</th><th>Spd kt</th></tr></thead>
           <tbody></tbody>
         </table>
-        <div class="sub"><span class="lbl">b. Loadout.</span> <span id="b-loadout"></span></div>
+        <div class="sub"><span class="lbl">b. Loadout.</span> <span id="b-loadout"></span>
+          <ul class="stores" id="b-stores"></ul></div>
         <figure class="map-fig">
           <div id="map" class="map" role="img" aria-label="Route and threat map"></div>
           <figcaption><span>Fig. 1 — Route, objective and threat overview.</span>

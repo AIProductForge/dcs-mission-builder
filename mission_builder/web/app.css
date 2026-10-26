@@ -118,6 +118,8 @@ table.grid tr.empty td { color: var(--ink-muted); font-style: italic; }
 table.kv th { width: 30%; background: var(--paper-2); }
 .tag { display: inline-block; font: 600 11px var(--cond); letter-spacing: .1em; padding: 0 5px; border: 1px solid currentColor; border-radius: 2px; }
 .tag.SAM, .tag.AAA, .tag.AIR { color: var(--threat); }
+.stores { margin: 4px 0 0; padding-left: 1.2em; columns: 2; column-gap: 24px; font-size: 12.5px; }
+.stores li { break-inside: avoid; }
 #b-notes { margin: 0 0 0 1.6em; padding-left: 1.2em; font-size: 13px; line-height: 1.55; }
 
 .map-fig { margin: 10px 0 0 1.6em; }
@@ -150,6 +152,7 @@ table.kv th { width: 30%; background: var(--paper-2); }
   .stamp { font-size: 54px; top: 90px; }
   .map { height: 320px; }
   table.grid { font-size: 11px; display: block; overflow-x: auto; }
+  .stores { columns: 1; }
 }
 
 @media print {

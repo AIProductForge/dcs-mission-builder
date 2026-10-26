@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import random
+import re
 from dataclasses import asdict, dataclass, field, fields
 
 import dcs
@@ -69,6 +70,7 @@ class MissionSpec:
     hour: int = 9
     weather: str = "Clear"
     enemy_skill: str = "Good"
+    loadout: str = ""              # stored loadout name; "" = pick one to suit the mission type
     awacs: bool = True
     tanker: bool = False
     seed: int = 0                  # drives every placement choice; same seed = same mission
@@ -139,6 +141,10 @@ def randomize(values: dict, locks: set[str], owned: list[str], terrains: list[st
     roll("hour", range(6, 17))
     roll("weather", ["Clear", "Clear", "Scattered clouds", "Overcast"])
     roll("enemy_skill", list(SKILLS))
+    names = loadouts(v["aircraft"])
+    if "loadout" not in locks or v.get("loadout") not in names:
+        suited = [n for n in names if _suits(n, v["mission_type"])]
+        v["loadout"] = rng.choice(suited or names) if names else ""
     roll("awacs", [True, True, True, False])
     roll("tanker", [True, False])
     if "seed" not in locks or not v.get("seed"):
@@ -156,7 +162,8 @@ PAYLOAD_KEYWORDS = {
     # Flaming Cliffs loadouts are named by their weapons, hence the weapon names.
     "CAP": ["BARCAP", "TARCAP", "CAP", "FIGHTER SWEEP", "ESCORT", "A-A", "AIR-TO-AIR",
             "AIM-120", "R-77", "R-27", "AIM-7", "R-73", "AIM-9"],
-    "Strike": ["CAS", "BAI", "STRIKE", "GROUND ATTACK", "KH-", "MK-82", "FAB-", "RBK-", "GBU-", "S-8"],
+    "Strike": ["CAS", "BAI", "STRIKE", "GROUND ATTACK", "DEAD", "SEAD", "OCA", "KH-", "MK-82", "FAB-", "RBK-",
+               "GBU-", "S-8"],
     "Free flight": ["FERRY", "BARCAP", "CAP"],
 }
 
@@ -171,9 +178,43 @@ def _main_task(utype, mission_type: str):
     return utype.task_default
 
 
-def _payload(utype, mission_type: str, maintask):
+def loadouts(type_id: str) -> list[str]:
+    """Every stored loadout name for this aircraft (DCS's own, then Liberation's)."""
+    return sorted((unit_type(type_id).load_payloads() or {}).keys(), key=str.lower)
+
+
+def _suits(name: str, mission_type: str) -> bool:
+    return any(k in name.upper() for k in PAYLOAD_KEYWORDS[mission_type])
+
+
+def _pylons(payload) -> list:
+    pylons = payload["pylons"]
+    return [(pylons[k]["num"], {"clsid": pylons[k]["CLSID"]}) for k in pylons]
+
+
+def stores_summary(pylons) -> list[str]:
+    """Human-readable store list, e.g. ['2x AIM-120C AMRAAM', '1x Fuel tank 610 gal']."""
+    from dcs.weapons_data import weapon_ids
+    counts: dict[str, int] = {}
+    for _station, p in pylons or []:
+        w = weapon_ids.get(p["clsid"])
+        name = (w["name"] if w else p["clsid"]).split(" - ")[0].strip()
+        # Multi-carriage racks are named like "GBU-38 * 3": count the bombs, not the rack.
+        rack = re.match(r"^(.*?)\s*\*\s*(\d+)$", name)
+        counts[rack.group(1) if rack else name] = counts.get(rack.group(1) if rack else name, 0) +             (int(rack.group(2)) if rack else 1)
+    # A rack's short name ("GBU-38") folds into the full one ("GBU-38(V)1/B") when both appear.
+    for short in sorted(counts, key=len):
+        longer = next((k for k in counts if k != short and k.startswith(short)), None)
+        if longer:
+            counts[longer] += counts.pop(short)
+    return [f"{n}x {name}" for name, n in counts.items()]
+
+
+def _payload(utype, mission_type: str, maintask, chosen: str = ""):
     """Pylons as [(station, {"clsid": ...}), ...] plus the loadout's name, or (None, "")."""
     payloads = utype.load_payloads() or {}
+    if chosen in payloads:
+        return _pylons(payloads[chosen]), chosen
     for keyword in PAYLOAD_KEYWORDS[mission_type]:
         for name, payload in payloads.items():
             if keyword in name.upper():
@@ -182,12 +223,12 @@ def _payload(utype, mission_type: str, maintask):
     return utype.loadout(maintask), "Default"
 
 
-def _arm(group, utype, mission_type: str, maintask) -> str:
-    pylons, name = _payload(utype, mission_type, maintask)
+def _arm(group, utype, mission_type: str, maintask, chosen: str = "") -> tuple[str, list[str]]:
+    pylons, name = _payload(utype, mission_type, maintask, chosen)
     for unit in group.units:
         for pylon in pylons or []:
             unit.load_pylon(pylon)
-    return name if pylons else "Guns only"
+    return (name if pylons else "Guns only"), stores_summary(pylons)
 
 
 # --- briefing data -------------------------------------------------------------------------
@@ -203,6 +244,7 @@ class Briefing:
     mission_type: str
     mission_statement: str
     loadout: str
+    stores: list
     home: dict
     objective: dict
     enemy_field: str
@@ -296,7 +338,7 @@ def build(spec: MissionSpec) -> tuple[Mission, Briefing]:
     player.units[0].set_player()
     for wingman in player.units[1:]:
         wingman.skill = Skill.High
-    loadout = _arm(player, player_type, spec.mission_type, maintask)
+    loadout, stores = _arm(player, player_type, spec.mission_type, maintask, spec.loadout)
     player.add_waypoint(home.position.point_from_heading(heading_out, distance * 0.4), cruise_alt, cruise_speed, "PUSH")
     player.add_waypoint(objective, cruise_alt, cruise_speed, "OBJECTIVE")
     player.land_at(home).name = "RECOVERY"
@@ -311,7 +353,7 @@ def build(spec: MissionSpec) -> tuple[Mission, Briefing]:
         codename=f"{rng.choice(CODENAME_A)} {rng.choice(CODENAME_B)}",
         dtg=_dtg(m.start_time, getattr(terrain, "utc_offset", None)),
         theatre=spec.terrain, aircraft=spec.aircraft, flight_size=spec.flight_size, callsign=callsign,
-        mission_type=spec.mission_type, mission_statement="", loadout=loadout,
+        mission_type=spec.mission_type, mission_statement="", loadout=loadout, stores=stores,
         home={"name": home.name, **_ll(home.position),
               "uhf": _mhz(home.atc_radio.uhf_hz) if home.atc_radio else None,
               "vhf": _mhz(home.atc_radio.vhf_high_hz) if home.atc_radio else None,

@@ -3,6 +3,7 @@
 GET  /                      the briefing page (web/index.html)
 GET  /api/options           owned aircraft, maps, choice lists, last session
 GET  /api/airports?terrain=&aircraft=   airfields valid for that aircraft
+GET  /api/loadouts?aircraft=            stored loadouts for that aircraft
 POST /api/generate {values, locks, reroll}  -> {values, briefing}
 POST /api/save                               -> {path}
 POST /api/ping                               keeps the server alive while the page is open
@@ -131,6 +132,11 @@ def make_handler(state: State):
                     q = parse_qs(url.query)
                     heli = state.gen.is_helicopter(q.get("aircraft", [""])[0]) if q.get("aircraft") else True
                     return self._json(200, state.gen.airports(q["terrain"][0], helicopter=heli))
+                if url.path == "/api/loadouts":
+                    aircraft = parse_qs(url.query)["aircraft"][0]
+                    g = state.gen
+                    return self._json(200, [{"name": n, "suits": [t for t in g.MISSION_TYPES if g._suits(n, t)]}
+                                            for n in g.loadouts(aircraft)])
                 name = "index.html" if url.path in ("/", "") else url.path.lstrip("/")
                 file = (WEB / name).resolve()
                 if WEB not in file.parents or not file.is_file():

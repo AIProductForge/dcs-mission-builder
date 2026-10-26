@@ -1,6 +1,6 @@
 "use strict";
 
-const FIELDS = ["aircraft", "terrain", "airport", "mission_type", "start", "flight_size",
+const FIELDS = ["aircraft", "terrain", "airport", "mission_type", "loadout", "start", "flight_size",
                 "date", "hour", "weather", "enemy_skill", "awacs", "tanker"];
 const PIN_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.5 1.5 14.5 5.5 12.6 6.1 9.9 8.8 10.2 12 8.9 13.3 6.2 10.6 2.6 14.2 1.8 13.4 5.4 9.8 2.7 7.1 4 5.8 7.2 6.1 9.9 3.4z"/></svg>';
 
@@ -58,11 +58,47 @@ async function refreshAirports(keep) {
   if (keep && list.includes(keep)) el("airport").value = keep;
 }
 
+// Loadouts for the selected aircraft, the ones suited to the selected mission listed first.
+async function refreshLoadouts(keep) {
+  const aircraft = el("aircraft").value;
+  if (state.loadoutsFor !== aircraft) {
+    state.loadouts = await api(`/api/loadouts?aircraft=${encodeURIComponent(aircraft)}`);
+    state.loadoutsFor = aircraft;
+  }
+  const select = el("loadout"), mission = el("mission_type").value;
+  select.innerHTML = "";
+  if (!state.loadouts.length) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "Guns only (none stored)";
+    select.appendChild(o);
+    return;
+  }
+  const groups = [[`Suited to ${mission}`, state.loadouts.filter((l) => l.suits.includes(mission))],
+                  ["Other", state.loadouts.filter((l) => !l.suits.includes(mission))]];
+  for (const [title, list] of groups) {
+    if (!list.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = title;
+    for (const l of list) {
+      const o = document.createElement("option");
+      o.value = l.name;
+      o.textContent = loadoutLabel(l.name);
+      g.appendChild(o);
+    }
+    select.appendChild(g);
+  }
+  if (keep && state.loadouts.some((l) => l.name === keep)) select.value = keep;
+}
+
+function loadoutLabel(name) { return name.replace(/^Liberation\s+/i, ""); }
+
 async function setValues(v) {
   el("aircraft").value = v.aircraft;
   el("terrain").value = v.terrain;
   await refreshAirports(v.airport);
   for (const f of ["mission_type", "start", "weather", "enemy_skill"]) el(f).value = v[f];
+  await refreshLoadouts(v.loadout);
   el("flight_size").value = String(v.flight_size);
   el("hour").value = String(v.hour);
   el("date").value = v.date;
@@ -102,6 +138,12 @@ function setupPins() {
         const keep = el("airport").value;
         await refreshAirports(keep);
         if (f === "terrain") state.locks.delete("airport");
+      }
+      if (f === "aircraft" || f === "mission_type") {
+        const keep = el("loadout").value;
+        await refreshLoadouts(keep);
+        // A different aircraft rarely has the same loadout name: let it be picked again.
+        if (f === "aircraft" && el("loadout").value !== keep) state.locks.delete("loadout");
       }
       renderPins();
       setStatus("Edited. Generate to reroll the rest, or Apply edits to keep this exact mission.");
@@ -193,8 +235,15 @@ function renderBriefing(b, v) {
   text("b-weather", `${w.summary}${w.cloud_base_ft ? `, cloud base ${fmtNum(w.cloud_base_ft)} ft` : ""}. ` +
                     `Visibility ${w.visibility}. Surface temperature ${w.temp_c} °C.`);
   text("b-mission", b.mission_statement);
-  const loadout = b.loadout.replace(/^Liberation\s+/i, "");
-  text("b-loadout", b.loadout === "Guns only" ? "Guns only (no stored loadout for this aircraft)." : `${loadout} configuration.`);
+  text("b-loadout", b.loadout === "Guns only" ? "Guns only (no stored loadout for this aircraft)."
+                                              : `${loadoutLabel(b.loadout)} configuration, per aircraft:`);
+  const stores = $("b-stores");
+  stores.innerHTML = "";
+  for (const item of b.stores || []) {
+    const li = document.createElement("li");
+    li.textContent = item;
+    stores.appendChild(li);
+  }
 
   rows("#b-route", b.waypoints, (p) => [
     [p.n, "num"], [p.name], [ddm(p.lat, p.lon)],
@@ -375,6 +424,7 @@ async function boot() {
     state.locks = new Set((last.locks || []).filter((f) => FIELDS.includes(f)));
   } else {
     await refreshAirports();
+    await refreshLoadouts();
   }
   renderPins();
 

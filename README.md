@@ -22,8 +22,10 @@ panel says so and everything else still works.
   DemoMods (trial aircraft) are skipped. Community mods aren't supported yet.
 - **Maps**: installed terrains pydcs can write for (not MarianasWWII).
 - **Loadouts**: DCS's own Mission Editor loadouts, then DCS Liberation's curated ones
-  (read from your Liberation install), matched by mission type. F-5E, F-86F, MiG-15 and
-  TF-51D get guns only.
+  (read from your Liberation install). The **Loadout** field lists every stored loadout for
+  the selected aircraft, with the ones suited to the mission type first; when it isn't pinned,
+  Generate picks a random suited one. The briefing lists the stores per aircraft. F-5E, F-86F,
+  MiG-15 and TF-51D have no stored loadouts and fly with guns only.
 
 ## Missions
 Each mission has your flight at a home airfield (or in the air nearby), plus an objective
