@@ -165,6 +165,11 @@ function setupPins() {
       if (f === "airport") ["terrain", "scenario", "side"].forEach((x) => state.locks.add(x));
       if (f === "scenario") state.locks.add("terrain");
       if (f === "terrain") { refreshScenarios(); state.locks.delete("scenario"); }
+      if ((f === "terrain" || f === "scenario") && !state.locks.has("side")) {
+        // Some scenarios have a natural home side (e.g. UAE rather than Iran in the Gulf).
+        const preferred = (state.options.default_sides[el("terrain").value] || {})[el("scenario").value];
+        if (preferred) el("side").value = preferred;
+      }
       if (f === "aircraft" && !refreshMissionTypes(el("mission_type").value)) state.locks.delete("mission_type");
       if (["terrain", "scenario", "side", "aircraft"].includes(f)) {
         // Home field must be on the player's side of the scenario: drop the pin if it no longer is.

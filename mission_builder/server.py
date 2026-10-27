@@ -85,6 +85,8 @@ class State:
             "helicopter_missions": g.HELICOPTER_MISSIONS,
             "scenarios": {t: g.scenario_names(t) for t in self.terrains},
             "sides": g.SIDES,
+            "default_sides": {t: {n: g.default_side(t, n) for n in g.scenario_names(t) if g.default_side(t, n)}
+                              for t in self.terrains},
             "complexity_names": g.COMPLEXITY_NAMES,
             "starts": list(g.START_TYPES),
             "weather": list(g.WEATHER),
@@ -178,6 +180,12 @@ def make_handler(state: State):
     return Handler
 
 
+class Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a port that is already in use,
+    # which would hide the "already running" case below.
+    allow_reuse_address = sys.platform != "win32"
+
+
 def _watchdog(server: ThreadingHTTPServer, state: State) -> None:
     while True:
         time.sleep(5)
@@ -198,7 +206,7 @@ def main() -> None:
     state = State(config)
     port = int(config.get("port", 8765))
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(state))
+        server = Server(("127.0.0.1", port), make_handler(state))
     except OSError:
         # Already running (or port taken): just open the existing page.
         webbrowser.open(f"http://127.0.0.1:{port}/")

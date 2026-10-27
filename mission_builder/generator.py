@@ -49,6 +49,15 @@ SIDES = ["Blue (as scenario)", "Red (sides swapped)"]
 NO_SCENARIO = "None (any airfield)"
 COMPLEXITY_NAMES = {1: "Low", 2: "Moderate", 3: "Medium", 4: "High", 5: "Very high"}
 
+# Airfields the player expects to fly from on maps where Liberation's colours don't say so.
+# Some Persian Gulf campaigns make Iran blue; when exactly one side holds UAE/Oman fields,
+# that side is the default (Play as can still be swapped or pinned).
+PREFERRED_HOME = {
+    "PersianGulf": {"Abu Dhabi Intl", "Al Ain Intl", "Al Dhafra AFB", "Al Maktoum Intl", "Al Minhad AFB",
+                    "Al-Bateen", "Dubai Intl", "Fujairah Intl", "Khasab", "Liwa AFB", "Ras Al Khaimah Intl",
+                    "Sas Al Nakheel", "Sharjah Intl", "Sir Abu Nuayr"},
+}
+
 # Receivers that refuel from a drogue (probe) rather than a boom.
 PROBE_AIRCRAFT = {"FA-18C_hornet", "F-14A-95-GR", "F-14A-135-GR-Early", "F-14A-135-GR", "F-14B",
                   "Su-33", "J-11A"}
@@ -120,6 +129,17 @@ def _sides(sc: Scenario | None, side: str):
     return sc.blue_fields, sc.red_fields, sc.blue_sites, sc.red_sites, sc.red_ships
 
 
+def default_side(terrain_name: str, scenario: str) -> str | None:
+    """The side the player should fly by default, or None to roll it as usual."""
+    sc, pref = find_scenario(terrain_name, scenario), PREFERRED_HOME.get(terrain_name)
+    if not (sc and pref):
+        return None
+    blue, red = bool(pref & set(sc.blue_fields)), bool(pref & set(sc.red_fields))
+    if blue == red:  # neither side (e.g. a war inside Iran) or both
+        return None
+    return SIDES[0] if blue else SIDES[1]
+
+
 def airports(terrain_name: str, helicopter: bool = True, scenario: str = "", side: str = SIDES[0]) -> list[str]:
     """Airfields the player can start from: their side's (when a scenario is chosen),
     helicopters anywhere on them, aeroplanes only where there is a runway."""
@@ -173,7 +193,11 @@ def randomize(values: dict, locks: set[str], owned: list[str], terrains: list[st
     if "scenario" not in locks or v.get("scenario") not in names:
         real = names[:-1]
         v["scenario"] = rng.choice(real) if real else NO_SCENARIO
-    roll("side", [SIDES[0], SIDES[0], SIDES[0], SIDES[1]])
+    preferred = default_side(v["terrain"], v["scenario"])
+    if preferred and ("side" not in locks or v.get("side") not in SIDES):
+        v["side"] = preferred
+    else:
+        roll("side", [SIDES[0], SIDES[0], SIDES[0], SIDES[1]])
 
     if "aircraft" not in locks:
         candidates = owned

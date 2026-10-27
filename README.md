@@ -32,10 +32,12 @@ Geography comes from DCS Liberation's campaign files (read from your Liberation 
 cached in `scenarios_cache.json`). Each scenario says which airfields are blue and which are
 red, and where on land each side has SAM sites, radars, armour, depots and so on. You fly from
 your side's airfields, enemy aircraft come from theirs, and ground objectives are placed on
-their own land positions, never in the sea. **Play as** swaps sides. Some Liberation campaigns
-cast the side you might expect to be the enemy as blue (several Persian Gulf ones put blue in
-Iran); swap sides or pin a different scenario if you prefer. With no scenario, any airfield can
-be home and objectives sit next to an enemy airfield.
+their own land positions, never in the sea. **Play as** swaps sides. On the Persian Gulf map
+you fly from the UAE/Oman side by default whenever one side holds those fields (Liberation's
+"Battle of Abu Dhabi" makes Iran blue, so it defaults to sides swapped); pin Play as to fly the
+other side. "Scenic Route 2" and "Valley of Rotary" are fought entirely inside Iran, so both
+sides start there. With no scenario, any airfield can be home and objectives sit next to an
+enemy airfield.
 
 ## Missions
 Free flight, CAP, Intercept, Strike, CAS and SEAD (helicopters: Free flight, Strike, CAS).
