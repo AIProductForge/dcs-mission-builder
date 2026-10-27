@@ -159,11 +159,12 @@ class State:
         with self.lock:
             logs = Path(self.config["dcs_logs"])
             for theatre, c in self.campaigns.items():
-                for sid, (dead, source) in self.campaign_mod.scan(logs, c.data["sorties"], self.seen_logs,
-                                                                  force).items():
+                for sid, (dead, source, flown) in self.campaign_mod.scan(logs, c.data["sorties"], self.seen_logs,
+                                                                          force).items():
                     sortie = next(s for s in c.data["sorties"] if s["id"] == sid)
-                    changes += c.apply(sortie, dead, source) or [f"{len(dead)} enemy units destroyed."]
-                    changes += self.war.after_sortie(c, sortie, dead)
+                    ground = c.apply(sortie, dead, source)
+                    summary = self.war.after_sortie(c, sortie, dead, flown, ground)
+                    changes += summary or ground or [f"{len(dead)} enemy units destroyed."]
                     c.save()
                     self.refresh_view(theatre)
         return changes

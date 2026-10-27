@@ -254,7 +254,7 @@ function renderLog() {
   for (const e of [...S.snap.events].reverse().slice(0, 25)) {
     const li = document.createElement("li");
     li.textContent = e.text;
-    if (e.side) li.className = e.side;
+    li.className = [e.side || "", e.debrief ? "debrief" : ""].join(" ").trim();
     ul.appendChild(li);
   }
 }
@@ -466,9 +466,17 @@ async function refresh(full = false) {
 }
 
 function take(snap, full) {
+  const first = !S.snap;
   S.snap = snap;
   S.at = performance.now();
   render(full);
+  // A flight just came back from DCS: say what happened (also on reopening the page soon after).
+  const debrief = [...snap.events].reverse().find((e) => e.debrief);
+  if (debrief && debrief.sortie !== S.lastDebrief) {
+    const fresh = Date.now() - new Date(debrief.when).getTime() < 15 * 60 * 1000;
+    if (!first || fresh) setStatus(debrief.text + " The war is paused there: press Run to carry on.", "ok");
+    S.lastDebrief = debrief.sortie;
+  }
 }
 
 async function clockCmd(body) {

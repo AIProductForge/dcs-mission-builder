@@ -464,6 +464,7 @@ class _Builder:
         self.target_groups: list = []
         self.n = 0  # unique-name counter
         self.tracked_units: list[str] = []  # units on campaign sites, named "MB:<site>:..."
+        self.site_groups: dict[str, list] = {}  # campaign site id -> vehicle groups placed on it
 
     def name(self, base: str) -> str:
         self.n += 1
@@ -618,11 +619,21 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             w = g.add_waypoint(p, wp["alt"], wp["speed"] * 3.6, wp["name"])
             if wp["name"] == "STATION" and mission == "CAP":
                 w.tasks.append(task.EngageTargets(max_distance=60000, targets=[task.Targets.All.Air]))
-            elif wp["name"] == "TARGET" and mission == "SEAD":
-                w.tasks.append(task.EngageTargets(max_distance=40000,
-                                                  targets=[task.Targets.All.GroundUnits.AirDefence]))
             elif wp["name"] == "TARGET":
-                w.tasks.append(task.EngageTargets(max_distance=15000, targets=[task.Targets.All.GroundUnits]))
+                # Strikers need an explicit attack order: engaging "anything nearby" left
+                # F-117s overflying their target without dropping.
+                groups = B.site_groups.get(a.get("target") or "", [])
+                if groups:
+                    for tg in groups:
+                        w.tasks.append(task.AttackGroup(tg.id))
+                elif a.get("target_xy"):
+                    w.tasks.append(task.Bombing(Point(a["target_xy"][0], a["target_xy"][1], B.terrain),
+                                                group_attack=True))
+                if mission in ("SEAD", "CAS"):
+                    w.tasks.append(task.EngageTargets(
+                        max_distance=40000 if mission == "SEAD" else 15000,
+                        targets=[task.Targets.All.GroundUnits.AirDefence if mission == "SEAD"
+                                 else task.Targets.All.GroundUnits]))
         if a["delay"] > 0:
             g.late_activation = True
             t = TriggerOnce(comment=f"Launch {a['id']}")
@@ -666,8 +677,9 @@ def add_ground(B: "_Builder", sites: list[dict]) -> None:
                 B.track(g.units[0], site["id"])
             continue
         types = GROUND_UNITS[site["side"]].get(site["role"]) or GROUND_UNITS[site["side"]]["armor"]
-        B.ground(f"{site['side']} {site['role']}", types, pos, country=country,
-                 spread=120 if site["role"] == "sam" else 60, site=site["id"])
+        g = B.ground(f"{site['side']} {site['role']}", types, pos, country=country,
+                     spread=120 if site["role"] == "sam" else 60, site=site["id"])
+        B.site_groups.setdefault(site["id"], []).append(g)
         if site["side"] == "red" and site["role"] in GROUND_THREATS:
             name, rng_m = GROUND_THREATS[site["role"]]
             B.b.threats.append({"name": name, "kind": "SAM" if site["role"] == "sam" else "AAA", **_ll(pos),

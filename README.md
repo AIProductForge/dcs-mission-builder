@@ -77,7 +77,8 @@ spirit of Falcon BMS's dynamic campaign:
     the targets of the other flights in the mission, red strikes included (up to 90 positions);
   - your own target or CAP station, the airfield owners, and the time of day.
   **Briefing** opens it on the Tasking page. When the results come back (units destroyed on both
-  sides and aircraft lost, from `dcs.log`), the war resumes from that moment. **Give back to AI**
+  sides and aircraft lost, from `dcs.log`), the war moves on by the time you spent in the mission
+  and stays paused there, and the map shows a "Back from DCS" summary. **Give back to AI**
   hands the flight back unflown.
 - **Frag a mission.** Add your own missions to the ATO (a "frag": the order that adds or
   changes a mission on an ATO). Pick any friendly squadron and any task it flies: Strike, SEAD or

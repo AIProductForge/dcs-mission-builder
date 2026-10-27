@@ -591,7 +591,8 @@ def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[
             if not rest:
                 continue
             out.append({"id": f["id"], "side": f["side"], "type": f["type"], "count": f["count"], "heli": f["heli"],
-                        "mission": f["mission"], "x": x, "y": y, "alt": f["route"][0]["alt"],
+                        "mission": f["mission"], "target": f.get("target"), "target_xy": f.get("target_xy"),
+                        "x": x, "y": y, "alt": f["route"][0]["alt"],
                         "speed": f["route"][0]["speed"], "route": rest, "delay": round(at - now),
                         "base": f["base"]})
     return out
@@ -654,32 +655,54 @@ def ground_sites(c: Campaign, f: dict, ambient: list[dict]) -> list[dict]:
     return [{k: by_id[i][k] for k in ("id", "side", "role", "x", "y", "zone")} for i in chosen]
 
 
-def after_sortie(c: Campaign, sortie: dict, dead_units: set[str]) -> list[str]:
-    """Losses logged in DCS: the player's flight and any AI flight that was in the mission."""
+def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float = 0.0,
+                 changes: list[str] | None = None) -> list[str]:
+    """Apply what happened in DCS: aircraft lost on both sides (units named MBF:<flight>:n),
+    then move the war on by the time spent in the mission and log one summary."""
     w = _war(c)
     lost: dict[str, int] = {}
     for u in dead_units:
         if u.startswith("MBF:"):
             fid = u.split(":")[1]
             lost[fid] = lost.get(fid, 0) + 1
-    notes = []
+    mine = next((f for f in w["flights"] if f["id"] == sortie.get("flight")), None)
+    friendly_lost = enemy_lost = 0
     for f in w["flights"]:
         n = lost.get(f["id"], 0)
-        if f["id"] == sortie.get("flight"):
+        if f is mine:
             f["flown"], f["resolved"], f["player"] = True, True, False
             f["result"] = "flown in DCS" + (f"; lost {n}" if n else "")
         if n:
             n = _lose(c, f, n, w["clock"])
-            notes.append(f"{f['callsign']} lost {n} aircraft in DCS.")
+            if f["side"] == "blue":
+                friendly_lost += n
+            else:
+                enemy_lost += n
     rng = random.Random()
     for s in c.data["sites"]:  # sites destroyed in DCS get repaired like any others
         if not s["alive"] and not s.get("withdrawn") and "repair_at" not in s:
             schedule_repair(s, w["clock"], rng)
     if w["player_flight"] == sortie.get("flight"):
         w["mode"], w["player_flight"] = "running", None
-    for note in notes:
-        c.log(f"{clock_label(c)} · {note}", side="blue", t=w["clock"])
-    return notes
+    if not mine:
+        return []
+    # The war moves on by the time you spent in the mission (it stays paused).
+    began = mine.get("joined_at", mine["takeoff"])
+    if flown and w["clock"] < began + flown:
+        advance(c, began + flown)
+    parts = []
+    if enemy_lost:
+        parts.append(f"{enemy_lost} enemy aircraft shot down")
+    ground = [x for x in (changes or []) if not x.startswith("Lost")]
+    lost_ground = [x for x in (changes or []) if x.startswith("Lost")]
+    parts += [x[0].lower() + x[1:].rstrip(".") for x in ground]
+    if friendly_lost:
+        parts.append(f"{friendly_lost} friendly aircraft lost")
+    parts += [x[0].lower() + x[1:].rstrip(".") for x in lost_ground]
+    summary = (f"{clock_label(c)} · Back from DCS after {round(flown / 60)} min: {mine['callsign']} "
+               f"({mine['type']}, {mine['mission']}): " + ("; ".join(parts) if parts else "no losses either side") + ".")
+    c.log(summary, mine["mission"], mine["type"], side="blue", t=w["clock"], sortie=sortie["id"], debrief=True)
+    return [summary]
 
 
 # --- the map page -------------------------------------------------------------------------

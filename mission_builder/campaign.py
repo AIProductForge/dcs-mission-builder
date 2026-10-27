@@ -265,8 +265,9 @@ class Campaign:
         sortie["result"] = {"applied": dt.datetime.now().isoformat(timespec="seconds"), "source": source,
                             "units_killed": len(dead_units), "changes": changes}
         enemy_kills = sum(1 for u in dead_units if u.startswith("MB:R"))
-        self.log(" ".join(changes) or f"{enemy_kills} enemy ground units destroyed; no site lost.",
-                 sortie["mission"], sortie["aircraft"], sortie=sortie["id"])
+        if not sortie.get("flight"):  # campaign flights get one summary from war.after_sortie
+            self.log(" ".join(changes) or f"{enemy_kills} enemy ground units destroyed; no site lost.",
+                     sortie["mission"], sortie["aircraft"], sortie=sortie["id"])
         self.save()
         return changes
 
@@ -314,7 +315,7 @@ do
     elseif e.id == world.event.S_EVENT_KILL then
       mark(nameOf(e.target))
     elseif e.id == world.event.S_EVENT_MISSION_END then
-      log("END")
+      log("END|" .. string.format("%.0f", timer.getTime()))
     end
   end
   world.addEventHandler(handler)
@@ -355,33 +356,51 @@ def _log_texts(logs_dir: Path, since: float, seen_zips: set[str]):
         yield "dcs.log", live.read_text(encoding="utf-8", errors="replace"), False
 
 
+_STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
+
+
 def scan(logs_dir: Path, sorties: list[dict], seen_zips: set[str], force_live: bool = False):
-    """Results for pending sorties: {sortie id: (dead unit names, source)}.
+    """Results for pending sorties: {sortie id: (dead unit names, source, seconds flown)}.
 
     A sortie counts as finished when its END line is logged, when it appears in an
-    archived log (DCS restarted after it), or when force_live is set."""
+    archived log (DCS restarted after it), or when force_live is set. Seconds flown is the
+    mission time logged at END, else the time between the sortie's first and last log lines."""
     pending = {s["id"]: s for s in sorties if s["status"] == "pending"}
     if not pending or not logs_dir.is_dir():
         return {}
     since = min(dt.datetime.fromisoformat(s["saved"]).timestamp() for s in pending.values()) - 60
-    found: dict[str, tuple[set, str]] = {}
+    found: dict[str, tuple[set, str, float]] = {}
     pat = re.compile(rf"{LOG_TAG}\|([0-9a-f]+)\|(\w+)(?:\|(\S+))?")
     for source, text, finished in _log_texts(logs_dir, since, seen_zips):
         lines: dict[str, dict] = {}
-        for m in pat.finditer(text):
+        for line in text.splitlines():
+            m = pat.search(line)
+            if not m:
+                continue
             sid, kind, arg = m.groups()
             if sid not in pending or sid in found:
                 continue
-            rec = lines.setdefault(sid, {"dead": set(), "end": False, "start": False})
+            rec = lines.setdefault(sid, {"dead": set(), "end": False, "start": False, "first": None, "last": None,
+                                         "mission_time": None})
+            stamp = _STAMP.match(line)
+            if stamp:
+                when = dt.datetime.fromisoformat(stamp.group(1))
+                rec["first"] = rec["first"] or when
+                rec["last"] = when
             if kind == "DEAD" and arg:
                 rec["dead"].add(arg)
             elif kind == "END":
                 rec["end"] = True
+                if arg and arg.replace(".", "", 1).isdigit():
+                    rec["mission_time"] = float(arg)
             elif kind == "START":
                 rec["start"] = True
         for sid, rec in lines.items():
             if rec["start"] and (finished or rec["end"] or force_live):
-                found[sid] = (rec["dead"], source)
+                flown = rec["mission_time"]
+                if flown is None and rec["first"] and rec["last"]:
+                    flown = (rec["last"] - rec["first"]).total_seconds()
+                found[sid] = (rec["dead"], source, flown or 0.0)
         if finished:
             seen_zips.add(source)
     return found
