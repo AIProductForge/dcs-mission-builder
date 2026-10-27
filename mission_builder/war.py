@@ -536,22 +536,30 @@ def cancel(c: Campaign, flight_id: str) -> None:
 # --- flying a flight in DCS ---------------------------------------------------------------
 
 def take_flight(c: Campaign, flight_id: str) -> dict:
-    """Jump the clock to a planned blue flight's takeoff and hand it to the player."""
+    """Hand a blue flight to the player. A planned flight: the clock jumps to its takeoff.
+    A flight already in the air: the player joins it now, where it is (f["joined_at"])."""
     w = _war(c)
     f = next((x for x in w["flights"] if x["id"] == flight_id), None)
-    if not f or f["side"] != "blue" or f["status"] != "planned":
-        raise RuntimeError("That flight can't be flown: pick a planned friendly flight.")
+    if not f or f["side"] != "blue" or f["status"] not in ("planned", "airborne") or not f["count"]:
+        raise RuntimeError("That flight can't be flown: pick a planned or airborne friendly flight.")
     if f["type"] in {b[0] for b in BOMBERS}:
         raise RuntimeError(f"The {f['type']} is AI-only in DCS. Fly an escort or SEAD flight alongside it instead.")
-    advance(c, f["takeoff"] - 1)
-    if f["status"] != "planned":
-        raise RuntimeError("That flight was scrubbed before takeoff.")
-    w["clock"] = f["takeoff"]
+    if f["status"] == "airborne":
+        if w["clock"] >= f["land"] - 300:
+            raise RuntimeError(f"{f['callsign']} is about to land. Pick another flight.")
+        f["joined_at"] = w["clock"]
+    else:
+        advance(c, f["takeoff"] - 1)
+        if f["status"] != "planned":
+            raise RuntimeError("That flight was scrubbed before takeoff.")
+        w["clock"] = f["takeoff"]
+        f.pop("joined_at", None)
     f["player"] = True
     f["status"] = "airborne"
     w["mode"], w["paused"], w["player_flight"] = "in_dcs", True, f["id"]
     w["stats"]["sorties"] += 1
-    c.log(f"{clock_label(c)} · You take {f['callsign']} ({f['count']}x {f['type']}, {f['mission']}"
+    c.log(f"{clock_label(c)} · You {'join' if 'joined_at' in f else 'take'} {f['callsign']} "
+          f"({f['count']}x {f['type']}, {f['mission']}"
           + (f" against {f['target_name']}" if f.get("target_name") else "") + ").", f["mission"], f["type"],
           side="blue", t=w["clock"])
     return f
@@ -587,6 +595,63 @@ def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[
                         "speed": f["route"][0]["speed"], "route": rest, "delay": round(at - now),
                         "base": f["base"]})
     return out
+
+
+def player_start(c: Campaign, f: dict) -> dict:
+    """Where the player's flight starts: at its base (planned), or in the air on its route
+    (joined): position, the waypoints still ahead, and whether its target is behind it."""
+    t = _war(c)["clock"]
+    if "joined_at" not in f:
+        return {"airborne": False}
+    x, y, leg = pos_at(f, t)
+    ahead = [r["name"] for r in f["route"][leg:] if r["t"] > t]
+    return {"airborne": True, "xy": [round(x), round(y)], "alt": f["route"][0]["alt"],
+            "past_target": "TARGET" not in ahead and "STATION" not in ahead and "CAP" not in ahead}
+
+
+def _seg_dist(p, a, b) -> float:
+    """Distance from point p to segment a-b."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    if dx == dy == 0:
+        return _dist(p, a)
+    k = max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / (dx * dx + dy * dy)))
+    return _dist(p, (ax + dx * k, ay + dy * k))
+
+
+# Ground forces put into a jump-in mission: everything alive near the player's route, enemy
+# SAMs and radars whose coverage reaches it, and the targets of the other flights in the mission.
+NEAR_ROUTE = 60_000
+COVERAGE = {"sam": 45_000, "ewr": 120_000}
+MAX_GROUND_SITES = 90
+
+
+def ground_sites(c: Campaign, f: dict, ambient: list[dict]) -> list[dict]:
+    t = _war(c)["clock"]
+    x, y, leg = pos_at(f, t)
+    path = [(x, y)] + [(r["x"], r["y"]) for r in f["route"][leg:] if r["t"] > t]
+    if len(path) < 2:
+        path.append(path[0])
+    segs = list(zip(path, path[1:]))
+    wanted: dict[str, float] = {}
+    for s in c.data["sites"]:
+        if not s["alive"]:
+            continue
+        d = min(_seg_dist((s["x"], s["y"]), a, b) for a, b in segs)
+        if d <= NEAR_ROUTE or (s["side"] == "red" and d <= COVERAGE.get(s["role"], 0)):
+            wanted[s["id"]] = d
+    for a in ambient:  # what the other flights are going after (red strikes included)
+        g = next((g for g in _war(c)["flights"] if g["id"] == a["id"]), None)
+        if g and g.get("target"):
+            site = next((s for s in c.data["sites"] if s["id"] == g["target"] and s["alive"]), None)
+            if site:
+                wanted.setdefault(site["id"], 0.0)
+    if f.get("target"):
+        wanted.pop(f["target"], None)  # the generator builds the player's own target
+    chosen = sorted(wanted, key=wanted.get)[:MAX_GROUND_SITES]
+    by_id = {s["id"]: s for s in c.data["sites"]}
+    return [{k: by_id[i][k] for k in ("id", "side", "role", "x", "y", "zone")} for i in chosen]
 
 
 def after_sortie(c: Campaign, sortie: dict, dead_units: set[str]) -> list[str]:

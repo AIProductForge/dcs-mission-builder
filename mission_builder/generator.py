@@ -91,6 +91,8 @@ class MissionSpec:
     flight: str = ""               # ATO flight id
     target_site: str = ""          # campaign site id to attack
     target_xy: list = field(default_factory=list)   # [x, y] objective, e.g. a CAP station
+    spawn_xy: list = field(default_factory=list)    # joining a flight in the air: where it is now
+    rtb: bool = False              # ...and its target is already behind it
 
     @classmethod
     def from_dict(cls, d: dict) -> "MissionSpec":
@@ -523,7 +525,7 @@ class _Builder:
             u.position = pos.point_from_heading(self.rng.uniform(0, 360), spread * (i > 0) * (1 + i * 0.5))
             if country is self.red:
                 u.skill = self.skill
-                self.track(u, site)
+            self.track(u, site)
         g.late_activation = late
         return g
 
@@ -635,8 +637,50 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             B.b.enemy_air.append(entry)
 
 
-def build(spec: MissionSpec, ambient: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
-    """Build a mission. `ambient`: the campaign's other flights (see war.ambient_flights)."""
+# Ground forces for a campaign site, by side and role (see add_ground).
+_A = vehicles.Armor
+GROUND_UNITS = {
+    "red": {"sam": SAM_SITES["SA-6"][0], "ewr": [AD.X_1L13_EWR], "shorad": [AD.ZSU_23_4_Shilka, AD.Strela_10M3],
+            "armor": [_A.T_72B, _A.BMP_2, _A.BTR_80], "missile": [vehicles.MissilesSS.Scud_B, vehicles.MissilesSS.Scud_B,
+                                                               vehicles.Unarmed.Ural_375]},
+    "blue": {"sam": [AD.Hawk_sr, AD.Hawk_tr, AD.Hawk_ln, AD.Hawk_ln], "ewr": [AD.Hawk_cwar],
+             "shorad": [AD.Vulcan, AD.M1097_Avenger], "armor": [_A.M_1_Abrams, _A.M_2_Bradley, _A.M_2_Bradley],
+             "missile": [vehicles.Artillery.MLRS, vehicles.Artillery.MLRS, vehicles.Unarmed.M_818]},
+}
+GROUND_THREATS = {"sam": ("SA-6 GAINFUL", 25_000), "shorad": ("SHORAD", 5_000)}
+
+
+def add_ground(B: "_Builder", sites: list[dict]) -> None:
+    """The campaign map's ground forces around the player's route (see war.ground_sites), both
+    sides, each unit named after its site so destroying it counts in the campaign."""
+    for site in sites:
+        if (round(site["x"]), round(site["y"])) in B.used_sites:
+            continue  # already placed by the mission itself
+        B.used_sites.add((round(site["x"]), round(site["y"])))
+        pos = Point(site["x"], site["y"], B.terrain)
+        country = B.red if site["side"] == "red" else B.blue
+        if site["role"] in ("structure", "farp"):
+            for i in range(2):
+                g = B.m.static_group(country, B.name(f"{site['side']} {site['role']}"), B.rng.choice(STRUCTURES),
+                                     pos.point_from_heading(B.rng.uniform(0, 360), 60 * i), heading=B.rng.uniform(0, 360))
+                B.track(g.units[0], site["id"])
+            continue
+        types = GROUND_UNITS[site["side"]].get(site["role"]) or GROUND_UNITS[site["side"]]["armor"]
+        B.ground(f"{site['side']} {site['role']}", types, pos, country=country,
+                 spread=120 if site["role"] == "sam" else 60, site=site["id"])
+        if site["side"] == "red" and site["role"] in GROUND_THREATS:
+            name, rng_m = GROUND_THREATS[site["role"]]
+            B.b.threats.append({"name": name, "kind": "SAM" if site["role"] == "sam" else "AAA", **_ll(pos),
+                                "range_nm": round(rng_m * M_TO_NM, 1), "note": f"Campaign site near {site['zone']}."})
+        elif site["side"] == "red" and site["role"] == "ewr":
+            B.b.threats.append({"name": "EWR (1L13)", "kind": "EWR", **_ll(pos), "range_nm": None,
+                                "note": f"Early-warning radar near {site['zone']}."})
+
+
+def build(spec: MissionSpec, ambient: list[dict] | None = None,
+          ground: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
+    """Build a mission. `ambient`: the campaign's other flights (see war.ambient_flights);
+    `ground`: campaign sites to place around the route (see war.ground_sites)."""
     B = _Builder(spec)
     m, rng, home, level = B.m, B.rng, B.home, B.level
     player_type = unit_type(spec.aircraft)
@@ -674,7 +718,8 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None) -> tuple[Mission
     maintask = _main_task(player_type, mt)
     start = START_TYPES[spec.start]
     if start is None:
-        spawn = home.position.point_from_heading(heading_out, 10000)
+        spawn = (Point(spec.spawn_xy[0], spec.spawn_xy[1], B.terrain) if spec.spawn_xy
+                 else home.position.point_from_heading(heading_out, 10000))
         player = m.flight_group_inflight(B.blue, "Player Flight", player_type, spawn, cruise_alt,
                                          cruise_speed, maintask=maintask, group_size=spec.flight_size)
         player.points[0].name = "Spawn"
@@ -712,12 +757,17 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None) -> tuple[Mission
     where = f"{obj_nm} nm {obj_brg:03d}°T of {home.name}"
     flight = f"{callsign} flight ({spec.flight_size}x {spec.aircraft})"
 
-    # Route: push, IP short of the objective, objective, recovery.
+    # Route: push, IP short of the objective, objective, recovery. Joining a flight in the
+    # air drops the points already behind it.
     ip = home.position.point_from_heading(heading_out, max(distance - (8000 if heli else 25000), distance * 0.6))
-    player.add_waypoint(home.position.point_from_heading(heading_out, distance * 0.35), cruise_alt, cruise_speed, "PUSH")
-    if mt in ("Strike", "CAS", "SEAD"):
-        player.add_waypoint(ip, cruise_alt, cruise_speed, "IP")
-    player.add_waypoint(objective, cruise_alt, cruise_speed, "OBJECTIVE")
+    push = home.position.point_from_heading(heading_out, distance * 0.35)
+    to_go = player.points[0].position.distance_to_point(objective) if spec.spawn_xy else distance
+    if not spec.rtb:
+        if to_go > push.distance_to_point(objective):
+            player.add_waypoint(push, cruise_alt, cruise_speed, "PUSH")
+        if mt in ("Strike", "CAS", "SEAD") and to_go > ip.distance_to_point(objective):
+            player.add_waypoint(ip, cruise_alt, cruise_speed, "IP")
+        player.add_waypoint(objective, cruise_alt, cruise_speed, "OBJECTIVE")
     player.land_at(home).name = "RECOVERY"
 
     # ---- objective content ----
@@ -946,6 +996,13 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None) -> tuple[Mission
                  "cloud_base_ft": round(2500 * M_TO_FT, -2) if wx is not None else None,
                  "visibility": "10+ km", "temp_c": round(m.weather.season_temperature)}
 
+    if ground:
+        add_ground(B, ground)
+        b.notes.append(f"Campaign ground forces: {len(ground)} positions along your route are in the mission, "
+                       "both sides; enemy SAMs and radars covering the route are among them.")
+    if spec.spawn_xy:
+        b.notes.append("You join this flight in the air, where the campaign map shows it."
+                       + (" Its target is behind it: recover to base." if spec.rtb else ""))
     if ambient:
         add_ambient(B, ambient)
         airborne = sum(1 for a in ambient if a["delay"] == 0)

@@ -258,8 +258,9 @@ class Campaign:
             s = by_id.get(site_id)
             if s and s["alive"] and killed.get(site_id, 0) >= max(1, math.ceil(placed * DESTROYED_SHARE)):
                 s["alive"] = False
-                changes.append(f"Destroyed {_role_name(s)} near {s['zone']}.")
-        changes += self.capture_check("blue", self.data.get("war", {}).get("clock"))
+                changes.append(f"{'Destroyed' if s['side'] == 'red' else 'Lost'} {_role_name(s)} near {s['zone']}.")
+        clock = self.data.get("war", {}).get("clock")
+        changes += self.capture_check("blue", clock) + self.capture_check("red", clock)
         sortie["status"] = "flown"
         sortie["result"] = {"applied": dt.datetime.now().isoformat(timespec="seconds"), "source": source,
                             "units_killed": len(dead_units), "changes": changes}

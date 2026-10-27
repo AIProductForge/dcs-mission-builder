@@ -66,14 +66,19 @@ spirit of Falcon BMS's dynamic campaign:
 - **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
   odds depend on the SAMs, short-range air defence and radar around the target and on enemy
   CAP nearby. CAPs that meet fight it out.
-- **Fly this flight.** Pick any planned friendly flight. The clock jumps to its takeoff and
-  pauses, and its `.miz` is saved: you fly that flight against its planned target, with every
-  other flight that is airborne at that moment placed where the map shows it, and flights due to
-  launch in the next 90 minutes appearing over their bases on time. **Briefing** opens it on the
-  Tasking page. When the results come back (enemy units destroyed at the target, and aircraft
-  lost on both sides, from `dcs.log`), the war resumes from takeoff. **Give back to AI** hands
-  the flight back unflown.
-
+- **Jump in now.** Pauses the war where it is. Pick a friendly flight whose aircraft you own:
+  one in the air starts you in the air where the map shows it, with the rest of its route (if its
+  target is already behind it, you fly it home); a planned one (**Fly this flight**) moves the clock
+  to its takeoff and starts you at its base. The `.miz` is saved straight away and holds:
+  - every other flight airborne at that moment, where the map shows it, and flights launching in
+    the next 90 minutes appearing over their bases on time;
+  - the campaign's ground forces around your route, both sides: every live position within about
+    60 km of it, enemy SAMs (45 km) and early-warning radars (120 km) whose coverage reaches it, and
+    the targets of the other flights in the mission, red strikes included (up to 90 positions);
+  - your own target or CAP station, the airfield owners, and the time of day.
+  **Briefing** opens it on the Tasking page. When the results come back (units destroyed on both
+  sides and aircraft lost, from `dcs.log`), the war resumes from that moment. **Give back to AI**
+  hands the flight back unflown.
 - **Frag a mission.** Add your own missions to the ATO (a "frag": the order that adds or
   changes a mission on an ATO). Pick any friendly squadron and any task it flies: Strike, SEAD or
   CAS against any enemy site, on the front line or deep behind it, or CAP over a station (over a

@@ -75,3 +75,6 @@ details.plan .btn { width: 100%; }
 .field input[type=number], .field input[type=time] { width: 100%; background: #10120f; color: var(--panel-text);
   border: 1px solid var(--panel-line); border-radius: 3px; padding: 6px 7px; font: 13px var(--mono); }
 .tag { font-size: 10px; letter-spacing: .06em; color: var(--pin); margin-left: 4px; }
+
+.btn.jump { width: 100%; margin-top: 8px; border-color: var(--pin); color: var(--pin); }
+.btn.jump:hover:not(:disabled) { background: var(--pin); color: var(--accent-ink); }

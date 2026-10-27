@@ -207,7 +207,11 @@ function renderSelected() {
   if (f.losses) lines.push(`Losses: ${f.losses}.`);
   $("sel-text").textContent = lines.join(" ");
   const open = f.side === "blue" && f.status === "planned" && t < f.takeoff && S.snap.mode === "running";
-  $("btn-fly").hidden = !open || S.snap.ai_only.includes(f.type);
+  // A friendly flight in the air can be joined now, where it is (not when it's about to land).
+  const joinable = f.side === "blue" && f.status === "airborne" && !f.player && f.count > 0 && inAir(f, t) &&
+                   t < f.land - 300 && S.snap.mode === "running";
+  $("btn-fly").hidden = !(open || joinable) || S.snap.ai_only.includes(f.type);
+  $("btn-fly").textContent = joinable ? "Jump in now (in the air)" : "Fly this flight (at takeoff)";
   $("btn-scrub").hidden = !open;
   if (open && S.snap.ai_only.includes(f.type)) $("sel-text").textContent += " AI only in DCS: fly an escort or SEAD flight alongside it.";
 }
@@ -260,6 +264,7 @@ function renderClock() {
   $("btn-run").textContent = s.paused ? "Run" : "Pause";
   $("btn-run").classList.toggle("on", !s.paused);
   $("btn-run").disabled = s.mode !== "running";
+  $("btn-jump").disabled = s.mode !== "running" || !!S.offline;
   for (const b of document.querySelectorAll(".rate")) b.classList.toggle("on", Number(b.dataset.rate) === s.rate);
   $("clock-state").textContent = S.offline ? "server stopped" : s.mode === "in_dcs" ? "in DCS" : s.paused ? "paused" : `running ${s.rate}×`;
   $("clock-state").classList.toggle("live", running());
@@ -471,12 +476,27 @@ async function clockCmd(body) {
   catch (e) { setStatus(e.message, "err"); }
 }
 
+// Jump in now: freeze the war where it is and point at the flights you can take.
+async function jumpIn() {
+  await clockCmd({ paused: true });
+  $("show-blue").checked = true;
+  $("show-red").checked = false;
+  $("show-done").checked = false;
+  renderAto();
+  const t = clockNow();
+  const air = S.snap.flights.filter((f) => f.side === "blue" && f.status === "airborne" && !S.snap.ai_only.includes(f.type)
+                                          && inAir(f, t) && t < f.land - 300).length;
+  setStatus(`War paused at ${label(t)}. Pick a friendly flight: ${air} in the air now (you start where it is), ` +
+            "or a planned one (you start at its takeoff).", "ok");
+}
+
 async function fly() {
   const f = S.snap.flights.find((x) => x.id === S.selected);
   if (!f || S.busy) return;
   S.busy = true;
   setStatus(`Building ${f.callsign}'s mission…`);
   try {
+    if (!S.snap.paused) await clockCmd({ paused: true });  // the moment you jump in is the moment on the map
     const res = await api("/api/war/fly", { theatre: S.theatre, flight: f.id });
     take(res.war, true);
     setStatus(`Saved ${res.path}. It's in DCS under Mission → My Missions → Generated.`, "ok");
@@ -505,6 +525,7 @@ async function boot() {
   for (const b of document.querySelectorAll(".rate")) b.addEventListener("click", () => clockCmd({ rate: Number(b.dataset.rate) }));
   for (const id of ["show-blue", "show-red", "show-done"]) $(id).addEventListener("change", renderAto);
   $("btn-fly").addEventListener("click", fly);
+  $("btn-jump").addEventListener("click", jumpIn);
   $("btn-scrub").addEventListener("click", async () => {
     try { take(await api("/api/war/cancel", { theatre: S.theatre, flight: S.selected }), false); setStatus("Flight scrubbed."); }
     catch (e) { setStatus(e.message, "err"); }

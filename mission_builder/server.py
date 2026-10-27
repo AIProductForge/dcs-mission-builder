@@ -12,7 +12,8 @@ POST /api/campaign/reset {theatre}           start that map's campaign again fro
 GET  /war.html                          the campaign map: the air war moving, the ATO, the clock
 GET  /api/war?theatre=                  that map's war: clock, airfields, sites, squadrons, flights, log
 POST /api/war/clock {theatre, rate, paused}  run, pause or change the clock's speed
-POST /api/war/fly {theatre, flight}          take a planned friendly flight: builds and saves its .miz
+POST /api/war/fly {theatre, flight}          take a friendly flight and save its .miz: a planned one at its
+                                             takeoff, an airborne one now (jump in), where the map shows it
 POST /api/war/release {theatre}              give a taken flight back to the AI
 POST /api/war/schedule {theatre, squadron, mission, count, tot, target | station | field}
                                              frag a mission onto the ATO (tot null = ASAP)
@@ -265,12 +266,16 @@ class State:
                     weather=rng.choice(["Clear", "Clear", "Scattered clouds", "Overcast"]), enemy_skill="Good",
                     awacs=True, tanker=False, seed=rng.randrange(1, 2**31), flight=f["id"],
                     target_site=f["target"] or "", target_xy=f["target_xy"])
+                start = war.player_start(c, f)
+                if start["airborne"]:  # joining a flight in the air, where the map shows it
+                    spec.start, spec.spawn_xy, spec.rtb = "In the air", start["xy"], start["past_target"]
                 ambient = war.ambient_flights(c, f["id"])
+                ground = war.ground_sites(c, f, ambient)
                 try:
-                    mission, briefing = g.build(spec, ambient)
+                    mission, briefing = g.build(spec, ambient, ground)
                 except g.NoParkingSlotError:
                     spec.start = "In the air"
-                    mission, briefing = g.build(spec, ambient)
+                    mission, briefing = g.build(spec, ambient, ground)
                 self.current = (spec, mission, briefing)
                 saved = self.save()
             except Exception:
