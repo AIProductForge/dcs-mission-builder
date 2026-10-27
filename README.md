@@ -53,8 +53,10 @@ start); **Apply now** applies the flight in progress from what's logged so far.
 
 - A position is destroyed when at least half of the units placed on it in one sortie are killed.
   Destroyed positions stay destroyed.
-- When every position in an enemy airfield's zone is destroyed, you capture the airfield: it
-  becomes a home field and the front moves to the next zones.
+- An enemy airfield is captured when 60% of the positions in its zone are destroyed, and 60% of
+  its SAM and early-warning radar positions are among them (armour alone won't take a field).
+  It becomes a home field, whatever is left of its zone withdraws, and the front moves to the
+  next zones. The campaign panel shows each field's progress, e.g. `12/48 · SAM/radar 5/23`.
 - Enemy fields with no positions of their own get a garrison on the field, so each must be taken.
 - Capture every enemy airfield to win. **Reset map** starts that map's campaign again.
 - Free flight missions, and missions whose targets aren't on a baseline position, don't change

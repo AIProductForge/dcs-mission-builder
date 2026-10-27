@@ -7,8 +7,8 @@ State lives in campaign/<theatre>.json next to the project:
 
 Each enemy site belongs to the zone of its nearest enemy airfield. An airfield with
 no sites of its own gets a garrison on its parking area, so every field has to be
-fought for. When every site in a field's zone is destroyed, blue captures the field:
-it becomes a home field and the front moves on.
+fought for. When 60% of a field's zone is destroyed, including 60% of its SAM and
+radar sites, blue captures the field: it becomes a home field and the front moves on.
 
 Results come back through dcs.log. Mission scripts can't write files in a stock DCS
 install, but env.info() can write log lines, so each mission logs a line per
@@ -41,6 +41,10 @@ BASELINES = {
 # A site counts as destroyed when at least this share of the units placed on it in one
 # sortie are killed (2 of 4 launchers, 3 of 6 structures...).
 DESTROYED_SHARE = 0.5
+# An enemy airfield falls when this share of its zone's sites is destroyed, and the same
+# share of its SAM and early-warning radar sites is among them (armour alone won't do).
+CAPTURE_SHARE = 0.6
+AIR_DEFENCE_ROLES = {"sam", "ewr"}
 LOG_TAG = "MBRESULT"
 
 
@@ -133,11 +137,20 @@ class Campaign:
                         front_sites=sorted(ids[f"{s['x']},{s['y']}"] for s in self.alive_sites()
                                            if s["zone"] in front))
 
+    def zone_status(self, field_name: str) -> dict:
+        """How far an enemy airfield's zone is from falling (see CAPTURE_SHARE)."""
+        mine = [s for s in self.data["sites"] if s["zone"] == field_name]
+        ad = [s for s in mine if s["role"] in AIR_DEFENCE_ROLES]
+        need = math.ceil(len(mine) * CAPTURE_SHARE)
+        ad_need = math.ceil(len(ad) * CAPTURE_SHARE)
+        destroyed = sum(not s["alive"] for s in mine)
+        ad_destroyed = sum(not s["alive"] for s in ad)
+        return {"alive": len(mine) - destroyed, "total": len(mine), "destroyed": destroyed, "needed": need,
+                "ad_total": len(ad), "ad_destroyed": ad_destroyed, "ad_needed": ad_need,
+                "capturable": destroyed >= need and ad_destroyed >= ad_need}
+
     def summary(self) -> dict:
-        zones = []
-        for n in self.fields_of("red"):
-            mine = [s for s in self.data["sites"] if s["zone"] == n]
-            zones.append({"field": n, "alive": sum(s["alive"] for s in mine), "total": len(mine)})
+        zones = [{"field": n, **self.zone_status(n)} for n in self.fields_of("red")]
         front = self.front_zones()
         zones.sort(key=lambda z: (z["field"] not in front, z["field"]))
         return {"theatre": self.theatre, "scenario": self.data["scenario"], "started": self.data["started"],
@@ -171,8 +184,11 @@ class Campaign:
                 s["alive"] = False
                 changes.append(f"Destroyed {_role_name(s)} near {s['zone']}.")
         for n in self.fields_of("red"):
-            if not any(s["alive"] for s in self.data["sites"] if s["zone"] == n):
+            if self.zone_status(n)["capturable"]:
                 self.data["fields"][n] = "blue"
+                for s in self.data["sites"]:  # what's left of the zone withdraws with the field
+                    if s["zone"] == n and s["alive"]:
+                        s["alive"], s["withdrawn"] = False, True
                 changes.append(f"Captured {n}.")
         if not self.fields_of("red"):
             changes.append("All enemy airfields captured. The campaign is won.")

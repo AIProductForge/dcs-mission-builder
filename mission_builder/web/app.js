@@ -76,9 +76,14 @@ function renderCampaign() {
   for (const z of c.zones) {
     const li = document.createElement("li");
     li.className = c.front.includes(z.field) ? "front" : "";
-    li.title = `${z.alive} of ${z.total} enemy sites around ${z.field} still standing. Destroy them all to capture it.`;
-    li.innerHTML = `<span class="name"></span><span class="count">${z.alive}/${z.total}</span>` +
-                   `<span class="bar"><span style="width:${z.total ? (100 * z.alive / z.total) : 0}%"></span></span>`;
+    // Progress toward capture: the slower of the two conditions (all sites, SAM/radar sites).
+    const parts = [z.needed ? z.destroyed / z.needed : 1, z.ad_needed ? z.ad_destroyed / z.ad_needed : 1];
+    const pct = Math.min(100, 100 * Math.min(...parts));
+    li.title = `${z.field}: ${z.destroyed} of ${z.total} enemy sites destroyed; ${z.needed} needed to capture` +
+               (z.ad_needed ? `, including ${z.ad_needed} of its ${z.ad_total} SAM and radar sites (${z.ad_destroyed} so far).` : ".");
+    li.innerHTML = `<span class="name"></span><span class="count">${z.destroyed}/${z.needed}` +
+                   (z.ad_needed ? ` · SAM/radar ${z.ad_destroyed}/${z.ad_needed}` : "") + `</span>` +
+                   `<span class="bar"><span style="width:${pct}%"></span></span>`;
     li.querySelector(".name").textContent = z.field;
     zones.appendChild(li);
   }
