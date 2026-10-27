@@ -20,8 +20,13 @@
   <form id="form" autocomplete="off" onsubmit="return false">
     <div class="field" data-field="aircraft"><label for="f-aircraft">Aircraft</label><select id="f-aircraft"></select></div>
     <div class="field" data-field="terrain"><label for="f-terrain">Theatre</label><select id="f-terrain"></select></div>
+    <div class="field" data-field="scenario"><label for="f-scenario">Scenario</label><select id="f-scenario"></select></div>
+    <div class="field" data-field="side"><label for="f-side">Play as</label><select id="f-side"></select></div>
     <div class="field" data-field="airport"><label for="f-airport">Home field</label><select id="f-airport"></select></div>
     <div class="field" data-field="mission_type"><label for="f-mission_type">Mission</label><select id="f-mission_type"></select></div>
+    <div class="field range" data-field="complexity"><label for="f-complexity">Complexity <output id="complexity-out" for="f-complexity"></output></label>
+      <input id="f-complexity" type="range" min="1" max="5" step="1" list="complexity-ticks">
+      <datalist id="complexity-ticks"><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option></datalist></div>
     <div class="field" data-field="loadout"><label for="f-loadout">Loadout</label><select id="f-loadout"></select></div>
     <div class="field" data-field="start"><label for="f-start">Start</label><select id="f-start"></select></div>
     <div class="field" data-field="flight_size"><label for="f-flight_size">Flight size</label>
@@ -57,6 +62,7 @@
           <tr><th>MSN NO</th><td id="b-msn">—</td><th>DTG</th><td id="b-dtg">—</td></tr>
           <tr><th>THEATRE</th><td id="b-theatre">—</td><th>FLIGHT</th><td id="b-flight">—</td></tr>
           <tr><th>AIRCRAFT</th><td id="b-aircraft">—</td><th>TASK</th><td id="b-task">—</td></tr>
+          <tr><th>SCENARIO</th><td id="b-scenario">—</td><th>COMPLEXITY</th><td id="b-complexity">—</td></tr>
         </table>
       </header>
 
@@ -79,8 +85,11 @@
           <thead><tr><th>WP</th><th>Name</th><th>Position</th><th>Brg °T</th><th>Dist nm</th><th>Alt ft</th><th>Spd kt</th></tr></thead>
           <tbody></tbody>
         </table>
+        <div class="sub" id="b-execution-wrap"><span class="lbl">Concept.</span> <span id="b-execution"></span></div>
         <div class="sub"><span class="lbl">b. Loadout.</span> <span id="b-loadout"></span>
           <ul class="stores" id="b-stores"></ul></div>
+        <div class="sub" id="b-triggers-wrap"><span class="lbl">c. Mission events.</span>
+          <ul class="events" id="b-triggers"></ul></div>
         <figure class="map-fig">
           <div id="map" class="map" role="img" aria-label="Route and threat map"></div>
           <figcaption><span>Fig. 1 — Route, objective and threat overview.</span>
@@ -89,6 +98,7 @@
               <span class="lg threat"></span>Threat ring
               <span class="lg air"></span>Enemy air
               <span class="lg support"></span>Support track
+              <span class="lg friendly"></span>Friendly flight
             </span></figcaption>
         </figure>
       </section>

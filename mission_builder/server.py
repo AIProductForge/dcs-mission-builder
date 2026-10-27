@@ -2,7 +2,7 @@
 
 GET  /                      the briefing page (web/index.html)
 GET  /api/options           owned aircraft, maps, choice lists, last session
-GET  /api/airports?terrain=&aircraft=   airfields valid for that aircraft
+GET  /api/airports?terrain=&aircraft=&scenario=&side=   the player's side's airfields for that aircraft
 GET  /api/loadouts?aircraft=            stored loadouts for that aircraft
 POST /api/generate {values, locks, reroll}  -> {values, briefing}
 POST /api/save                               -> {path}
@@ -34,6 +34,7 @@ DEFAULT_CONFIG = {
     "dcs_dir": r"F:\DCS World",
     "output_dir": str(SAVED_GAMES / "DCS" / "Missions" / "Generated"),
     "liberation_payloads": str(SAVED_GAMES / "dcs_liberation" / "resources" / "customized_payloads"),
+    "liberation_campaigns": str(SAVED_GAMES / "dcs_liberation" / "resources" / "campaigns"),
     "port": 8765,
     "last": {},
 }
@@ -46,7 +47,7 @@ def load_config() -> dict:
     config = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         config.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-    for key in ("dcs_dir", "output_dir", "liberation_payloads"):
+    for key in ("dcs_dir", "output_dir", "liberation_payloads", "liberation_campaigns"):
         config[key] = os.path.expandvars(config[key])
     return config
 
@@ -67,6 +68,9 @@ class State:
         self.owned = [a.type_id for a in owned]
         self.modules = {a.type_id: a.module_folder for a in owned}
         self.terrains = installed_terrains(dcs_dir)
+        from . import scenarios
+        generator.SCENARIOS.clear()
+        generator.SCENARIOS.update(scenarios.load(Path(config["liberation_campaigns"]), self.terrains))
         self.lock = threading.Lock()
         self.current = None          # (spec, mission, briefing) of the last generate
         self.last_ping = time.time()
@@ -78,6 +82,10 @@ class State:
             "aircraft": [{"id": a, "module": self.modules[a], "helicopter": g.is_helicopter(a)} for a in self.owned],
             "terrains": self.terrains,
             "mission_types": g.MISSION_TYPES,
+            "helicopter_missions": g.HELICOPTER_MISSIONS,
+            "scenarios": {t: g.scenario_names(t) for t in self.terrains},
+            "sides": g.SIDES,
+            "complexity_names": g.COMPLEXITY_NAMES,
             "starts": list(g.START_TYPES),
             "weather": list(g.WEATHER),
             "skills": list(g.SKILLS),
@@ -129,9 +137,10 @@ def make_handler(state: State):
                 if url.path == "/api/options":
                     return self._json(200, state.options())
                 if url.path == "/api/airports":
-                    q = parse_qs(url.query)
-                    heli = state.gen.is_helicopter(q.get("aircraft", [""])[0]) if q.get("aircraft") else True
-                    return self._json(200, state.gen.airports(q["terrain"][0], helicopter=heli))
+                    q = {k: v[0] for k, v in parse_qs(url.query).items()}
+                    heli = state.gen.is_helicopter(q["aircraft"]) if q.get("aircraft") else True
+                    return self._json(200, state.gen.airports(q["terrain"], heli, q.get("scenario", ""),
+                                                              q.get("side", state.gen.SIDES[0])))
                 if url.path == "/api/loadouts":
                     aircraft = parse_qs(url.query)["aircraft"][0]
                     g = state.gen

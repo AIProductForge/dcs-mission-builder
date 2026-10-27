@@ -9,3 +9,6 @@ mission_builder.log
 
 # generated missions
 *.miz
+
+# derived from Liberation campaigns at startup
+scenarios_cache.json

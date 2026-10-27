@@ -1,6 +1,6 @@
 "use strict";
 
-const FIELDS = ["aircraft", "terrain", "airport", "mission_type", "loadout", "start", "flight_size",
+const FIELDS = ["aircraft", "terrain", "scenario", "side", "airport", "mission_type", "complexity", "loadout", "start", "flight_size",
                 "date", "hour", "weather", "enemy_skill", "awacs", "tanker"];
 const PIN_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.5 1.5 14.5 5.5 12.6 6.1 9.9 8.8 10.2 12 8.9 13.3 6.2 10.6 2.6 14.2 1.8 13.4 5.4 9.8 2.7 7.1 4 5.8 7.2 6.1 9.9 3.4z"/></svg>';
 
@@ -47,15 +47,38 @@ function getValues() {
   }
   v.flight_size = Number(v.flight_size);
   v.hour = Number(v.hour);
+  v.complexity = Number(v.complexity);
   v.seed = state.seed;
   return v;
 }
 
 async function refreshAirports(keep) {
-  const terrain = el("terrain").value, aircraft = el("aircraft").value;
-  const list = await api(`/api/airports?terrain=${encodeURIComponent(terrain)}&aircraft=${encodeURIComponent(aircraft)}`);
+  const q = new URLSearchParams({ terrain: el("terrain").value, aircraft: el("aircraft").value,
+                                  scenario: el("scenario").value, side: el("side").value });
+  const list = await api(`/api/airports?${q}`);
   fillSelect(el("airport"), list);
   if (keep && list.includes(keep)) el("airport").value = keep;
+  return list.includes(keep);
+}
+
+function refreshScenarios(keep) {
+  const list = state.options.scenarios[el("terrain").value] || [];
+  fillSelect(el("scenario"), list);
+  if (keep && list.includes(keep)) el("scenario").value = keep;
+}
+
+// Helicopters fly Free flight, Strike and CAS only.
+function refreshMissionTypes(keep) {
+  const heli = (state.options.aircraft.find((a) => a.id === el("aircraft").value) || {}).helicopter;
+  const list = heli ? state.options.helicopter_missions : state.options.mission_types;
+  fillSelect(el("mission_type"), list);
+  if (keep && list.includes(keep)) el("mission_type").value = keep;
+  return list.includes(keep);
+}
+
+function showComplexity() {
+  const v = Number(el("complexity").value);
+  $("complexity-out").textContent = `${v} · ${state.options.complexity_names[v]}`;
 }
 
 // Loadouts for the selected aircraft, the ones suited to the selected mission listed first.
@@ -96,8 +119,13 @@ function loadoutLabel(name) { return name.replace(/^Liberation\s+/i, ""); }
 async function setValues(v) {
   el("aircraft").value = v.aircraft;
   el("terrain").value = v.terrain;
+  refreshScenarios(v.scenario);
+  el("side").value = v.side;
   await refreshAirports(v.airport);
-  for (const f of ["mission_type", "start", "weather", "enemy_skill"]) el(f).value = v[f];
+  refreshMissionTypes(v.mission_type);
+  el("complexity").value = String(v.complexity);
+  showComplexity();
+  for (const f of ["start", "weather", "enemy_skill"]) el(f).value = v[f];
   await refreshLoadouts(v.loadout);
   el("flight_size").value = String(v.flight_size);
   el("hour").value = String(v.hour);
@@ -127,17 +155,20 @@ function setupPins() {
     btn.setAttribute("aria-label", `Pin ${f.replace("_", " ")}`);
     btn.addEventListener("click", () => {
       state.locks.has(f) ? state.locks.delete(f) : state.locks.add(f);
-      if (f === "airport" && state.locks.has("airport")) state.locks.add("terrain");
+      if (f === "airport" && state.locks.has("airport")) ["terrain", "scenario", "side"].forEach((x) => state.locks.add(x));
+      if (f === "scenario" && state.locks.has("scenario")) state.locks.add("terrain");
       renderPins();
     });
     node.appendChild(btn);
     el(f).addEventListener("change", async () => {
       state.locks.add(f);
-      if (f === "airport") state.locks.add("terrain");
-      if (f === "terrain" || f === "aircraft") {
-        const keep = el("airport").value;
-        await refreshAirports(keep);
-        if (f === "terrain") state.locks.delete("airport");
+      if (f === "airport") ["terrain", "scenario", "side"].forEach((x) => state.locks.add(x));
+      if (f === "scenario") state.locks.add("terrain");
+      if (f === "terrain") { refreshScenarios(); state.locks.delete("scenario"); }
+      if (f === "aircraft" && !refreshMissionTypes(el("mission_type").value)) state.locks.delete("mission_type");
+      if (["terrain", "scenario", "side", "aircraft"].includes(f)) {
+        // Home field must be on the player's side of the scenario: drop the pin if it no longer is.
+        if (!(await refreshAirports(el("airport").value))) state.locks.delete("airport");
       }
       if (f === "aircraft" || f === "mission_type") {
         const keep = el("loadout").value;
@@ -227,6 +258,18 @@ function renderBriefing(b, v) {
   text("b-flight", `${b.callsign} (${b.flight_size}-SHIP)`);
   text("b-aircraft", b.aircraft);
   text("b-task", b.mission_type.toUpperCase());
+  text("b-scenario", b.scenario);
+  text("b-complexity", b.complexity.toUpperCase());
+  text("b-execution", b.execution.join(" "));
+  $("b-execution-wrap").hidden = !b.execution.length;
+  const events = $("b-triggers");
+  events.innerHTML = "";
+  for (const t of b.triggers) {
+    const li = document.createElement("li");
+    li.textContent = t;
+    events.appendChild(li);
+  }
+  $("b-triggers-wrap").hidden = !b.triggers.length;
 
   const enemy = b.situation.filter((s) => !s.startsWith("Friendly"));
   text("b-enemy", enemy.join(" ") || "None reported.");
@@ -347,11 +390,33 @@ function renderMap(b) {
     bounds.push(...pts);
   }
 
+  // friendly AI flights and troops
+  for (const f of b.friendly_air || []) {
+    if (f.route && f.route.length) {
+      const pts = f.route.map(ll);
+      L.polyline(pts, { color: C.support, weight: 2.5, dashArray: "2 6" }).addTo(g)
+        .bindTooltip(f.name, { className: "map-tip", sticky: true });
+      bounds.push(...pts);
+    } else if (f.lat !== undefined) {
+      L.circleMarker(ll(f), { radius: 7, color: C.support, weight: 2, fillColor: C.support, fillOpacity: 0.35 }).addTo(g)
+        .bindTooltip(f.name, { className: "map-tip" });
+      label(ll(f), "FRIENDLIES", "support", [-14, -8]).addTo(g);
+      bounds.push(ll(f));
+    }
+  }
+
   // threats
   for (const t of b.threats) {
     if (t.range_nm) {
       L.circle(ll(t), { radius: t.range_nm * 1852, color: C.threat, weight: 1.5, fillColor: C.threat, fillOpacity: 0.12 }).addTo(g)
         .bindTooltip(`${t.name}: ${t.range_nm} nm ring`, { className: "map-tip", sticky: true });
+      label(ll(t), t.name, "threat", [-10, -6]).addTo(g);
+      bounds.push(ll(t));
+    } else if (t.kind === "EWR" || t.name.includes("alert")) {
+      // Point threats without a ring: radars and fighters on alert at their field.
+      L.marker(ll(t), { keyboard: false, icon: L.divIcon({ className: "", iconAnchor: [7, 7],
+        html: `<svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="1" width="12" height="12" fill="none" stroke="${C.threat}" stroke-width="2"/></svg>` }) })
+        .addTo(g).bindTooltip(`${t.name}: ${t.note}`, { className: "map-tip" });
       label(ll(t), t.name, "threat", [-10, -6]).addTo(g);
       bounds.push(ll(t));
     }
@@ -412,6 +477,8 @@ async function boot() {
   fillSelect(el("aircraft"), o.aircraft, aircraftLabel, (a) => a.id);
   fillSelect(el("terrain"), o.terrains);
   fillSelect(el("mission_type"), o.mission_types);
+  fillSelect(el("side"), o.sides);
+  el("complexity").addEventListener("input", showComplexity);
   fillSelect(el("start"), o.starts);
   fillSelect(el("weather"), o.weather);
   fillSelect(el("enemy_skill"), o.skills);
@@ -423,7 +490,11 @@ async function boot() {
     await setValues(last.values);
     state.locks = new Set((last.locks || []).filter((f) => FIELDS.includes(f)));
   } else {
+    refreshScenarios();
     await refreshAirports();
+    refreshMissionTypes();
+    el("complexity").value = "3";
+    showComplexity();
     await refreshLoadouts();
   }
   renderPins();

@@ -27,21 +27,42 @@ panel says so and everything else still works.
   Generate picks a random suited one. The briefing lists the stores per aircraft. F-5E, F-86F,
   MiG-15 and TF-51D have no stored loadouts and fly with guns only.
 
-## Missions
-Each mission has your flight at a home airfield (or in the air nearby), plus an objective
-60–200 km away (25–70 km for helicopters) near an enemy airfield:
-- **Free flight**: no enemies, just a route out and back.
-- **CAP**: two MiG-29S patrolling toward you (Mi-24Vs for helicopters).
-- **Strike**: an armour column with an SA-8 and a ZSU-23-4.
+## Scenarios (who owns what)
+Geography comes from DCS Liberation's campaign files (read from your Liberation install and
+cached in `scenarios_cache.json`). Each scenario says which airfields are blue and which are
+red, and where on land each side has SAM sites, radars, armour, depots and so on. You fly from
+your side's airfields, enemy aircraft come from theirs, and ground objectives are placed on
+their own land positions, never in the sea. **Play as** swaps sides. Some Liberation campaigns
+cast the side you might expect to be the enemy as blue (several Persian Gulf ones put blue in
+Iran); swap sides or pin a different scenario if you prefer. With no scenario, any airfield can
+be home and objectives sit next to an enemy airfield.
 
-Options: start type, flight size (1–4; wingmen are AI), date, hour, weather, enemy skill,
-friendly AWACS (251 MHz), and a tanker (252 MHz, TACAN 52X) with a drogue for Hornet,
-Tomcat, Su-33 and J-11, or a boom for everything else.
+## Missions
+Free flight, CAP, Intercept, Strike, CAS and SEAD (helicopters: Free flight, Strike, CAS).
+Helicopters start from fields near the front and get objectives within reach.
+
+**Complexity** (1–5) scales each mission:
+| Level | Air defence at the objective | Elsewhere | Enemy air | Friendly AI |
+|---|---|---|---|---|
+| 1 Low | none | none | CAP: 2x MiG-21 | none |
+| 2 Moderate | ZSU-23-4, SA-9 | none | CAP: 2x MiG-23 | none |
+| 3 Medium | SA-8, ZSU-23-4, SA-13 | 1 SAM site, pop-up SHORAD | CAP: 4x MiG-29S; alert pair scrambles | F-15C CAP |
+| 4 High | SA-6, SA-15, ZSU-23-4 | 2 SAM sites, EWR, pop-up SHORAD | CAP: MiG-29S + Su-27, second wave | + F-16C SEAD |
+| 5 Very high | SA-11, SA-15, SA-19 | 3 SAM sites, EWR, pop-up SA-15 | CAP: Su-27, Su-30, MiG-31, second wave; standing Su-27 CAP | + F-16C SEAD |
+
+SEAD targets grow from an SA-8 (1) to an SA-10 with SA-15 cover (5); Strike targets from 2
+structures to 6 plus a Scud battery; CAS enemy armour from 3 to 8 vehicles; Intercept raids from
+2 Su-24s to 4 Tu-22M3s and 2 Tu-95s with escorts. Helicopter missions cap air defence at level 3.
+
+Triggers report mission success when the targets are destroyed, and failure when an Intercept
+raid reaches your field. Pop-up air defence and enemy scrambles activate as you approach the
+objective; the briefing warns about them without saying exactly what or where.
 
 Date matters for some systems: the Modern F-15E SIT/JTIDS mod needs a mission dated 1998 or later.
 
 ## Files
 - `mission_builder/inventory.py`: owned aircraft, terrains, loadout folders
+- `mission_builder/scenarios.py`: blue/red airfields and land positions from Liberation campaigns
 - `mission_builder/generator.py`: builds the mission (no UI, can be scripted)
 - `mission_builder/server.py`: local web server and JSON API (127.0.0.1 only)
 - `mission_builder/web/`: the briefing page (HTML, CSS, JS)

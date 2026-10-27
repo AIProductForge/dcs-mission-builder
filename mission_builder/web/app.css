@@ -58,6 +58,9 @@ body {
 .field.check { grid-template-columns: 1fr 26px; align-items: center; }
 .field.check label { grid-column: 1; margin: 0; }
 .field.check input { justify-self: start; grid-column: 1; grid-row: 2; width: 18px; height: 18px; accent-color: var(--accent); }
+.field.range input[type=range] { grid-column: 1; grid-row: 2; width: 100%; accent-color: var(--accent); margin: 6px 0 0; }
+.field.range output { color: var(--panel-text); letter-spacing: .06em; margin-left: 4px; text-transform: none; }
+.field.pinned output { color: var(--pin); }
 .pin {
   grid-column: 2; grid-row: 2; width: 26px; height: 30px; border: 1px solid var(--panel-line); border-radius: 3px;
   background: transparent; color: var(--panel-muted); cursor: pointer; display: grid; place-items: center; padding: 0;
@@ -117,9 +120,10 @@ table.grid td.num { text-align: right; }
 table.grid tr.empty td { color: var(--ink-muted); font-style: italic; }
 table.kv th { width: 30%; background: var(--paper-2); }
 .tag { display: inline-block; font: 600 11px var(--cond); letter-spacing: .1em; padding: 0 5px; border: 1px solid currentColor; border-radius: 2px; }
-.tag.SAM, .tag.AAA, .tag.AIR { color: var(--threat); }
+.tag.SAM, .tag.AAA, .tag.AIR, .tag.EWR { color: var(--threat); }
 .stores { margin: 4px 0 0; padding-left: 1.2em; columns: 2; column-gap: 24px; font-size: 12.5px; }
 .stores li { break-inside: avoid; }
+.events { margin: 4px 0 0; padding-left: 1.2em; font-size: 12.5px; line-height: 1.5; }
 #b-notes { margin: 0 0 0 1.6em; padding-left: 1.2em; font-size: 13px; line-height: 1.55; }
 
 .map-fig { margin: 10px 0 0 1.6em; }
@@ -131,6 +135,7 @@ table.kv th { width: 30%; background: var(--paper-2); }
 .lg.threat { border-color: var(--threat); height: 10px; border: 2px solid var(--threat); border-radius: 50%; width: 10px; background: rgba(179,38,30,.15); }
 .lg.air { border-top: 2px dashed var(--threat); }
 .lg.support { border-top: 2px dashed var(--support); }
+.lg.friendly { border-top: 2px dotted var(--support); }
 .map-offline { display: grid; place-items: center; height: 100%; color: var(--ink-muted); font-size: 12px; text-align: center; padding: 20px; }
 
 .doc-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--rule); font-size: 11px; color: var(--ink-muted); word-break: break-all; }
