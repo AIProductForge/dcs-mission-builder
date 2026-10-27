@@ -418,6 +418,23 @@ def _route(group) -> list[dict]:
     return out
 
 
+class InlineDoScript(action.Action):
+    """DO SCRIPT with the Lua written inline, the way the DCS 2.9 Mission Editor saves it.
+    pydcs's DoScript stores a dictionary key instead, and DCS then runs the key name itself
+    as code ("[string "DictKey_Translation_7"]:1: '=' expected near '<eof>'")."""
+    predicate = "a_do_script"
+
+    def __init__(self, code: str) -> None:
+        super().__init__(InlineDoScript.predicate)
+        self.code = code
+        self.params.append(code)
+
+    def dict(self):
+        d = super().dict()
+        d["text"] = self.code
+        return d
+
+
 # --- mission build -------------------------------------------------------------------------
 
 class _Builder:
@@ -947,7 +964,7 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None) -> tuple[Mission
     if B.tracked_units:
         b.sortie = campaign.new_sortie_id()
         t = TriggerStart(comment="Campaign results")
-        t.add_action(action.DoScript(m.string(campaign.results_script(b.sortie, B.tracked_units))))
+        t.add_action(InlineDoScript(campaign.results_script(b.sortie, B.tracked_units)))
         m.triggerrules.triggers.append(t)
         b.notes.append("Campaign mission: enemy losses at the objective and nearby sites are logged and "
                        "applied to the campaign after the flight.")
