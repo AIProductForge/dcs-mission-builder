@@ -86,6 +86,11 @@ class MissionSpec:
     awacs: bool = True
     tanker: bool = False
     seed: int = 0                  # drives every placement choice; same seed = same mission
+    minute: int = 0
+    # Set when flying a flight from the campaign's air tasking order:
+    flight: str = ""               # ATO flight id
+    target_site: str = ""          # campaign site id to attack
+    target_xy: list = field(default_factory=list)   # [x, y] objective, e.g. a CAP station
 
     @classmethod
     def from_dict(cls, d: dict) -> "MissionSpec":
@@ -423,7 +428,8 @@ class _Builder:
         self.rng = random.Random(spec.seed)
         self.terrain = TERRAINS[spec.terrain]()
         self.m = Mission(self.terrain)
-        self.m.start_time = dt.datetime.combine(dt.date.fromisoformat(spec.date), dt.time(int(spec.hour), 0))
+        self.m.start_time = dt.datetime.combine(dt.date.fromisoformat(spec.date),
+                                                dt.time(int(spec.hour), int(spec.minute)))
         self.blue = countries.CombinedJointTaskForcesBlue()
         self.red = countries.CombinedJointTaskForcesRed()
         self.m.coalition["blue"].add_country(self.blue)
@@ -555,7 +561,65 @@ class _Builder:
                               then=[action.SetFlag(1)], seconds=30)
 
 
-def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
+def _ato_objective(B: "_Builder", spec: MissionSpec) -> Point | None:
+    """The objective an ATO flight was planned against: its target site, or its station."""
+    if spec.target_site and B.sc:
+        for key, sid in B.sc.red_site_ids.items():
+            if sid == spec.target_site:
+                x, y = (float(v) for v in key.split(","))
+                B.used_sites.add((round(x), round(y)))
+                return Point(x, y, B.terrain)
+    if spec.target_xy:
+        return Point(spec.target_xy[0], spec.target_xy[1], B.terrain)
+    return None
+
+
+def add_ambient(B: "_Builder", flights: list[dict]) -> None:
+    """The campaign's other flights at mission start: in the air where the campaign map shows
+    them, flying the rest of their route; flights not yet launched appear over their base on time."""
+    for a in flights:
+        country = B.blue if a["side"] == "blue" else B.red
+        ptype = unit_type(a["type"])
+        mission = a["mission"] if a["mission"] in PAYLOAD_KEYWORDS else "CAP"
+        maintask = _main_task(ptype, mission)
+        alt, kmh = a["alt"], a["speed"] * 3.6
+        g = B.m.flight_group_inflight(country, f"MBF:{a['id']}", ptype, Point(a["x"], a["y"], B.terrain), alt, kmh,
+                                      maintask=maintask, group_size=a["count"])
+        for i, u in enumerate(g.units):
+            u.name = f"MBF:{a['id']}:{i + 1}"
+            B.tracked_units.append(u.name)
+            if country is B.red:
+                u.skill = B.skill
+        _arm(g, ptype, mission, maintask)
+        for wp in a["route"]:
+            p = Point(wp["x"], wp["y"], B.terrain)
+            if wp["name"] == "LAND" and a["base"] in B.terrain.airports:
+                g.land_at(B.terrain.airports[a["base"]])
+                break
+            w = g.add_waypoint(p, wp["alt"], wp["speed"] * 3.6, wp["name"])
+            if wp["name"] == "STATION" and mission == "CAP":
+                w.tasks.append(task.EngageTargets(max_distance=60000, targets=[task.Targets.All.Air]))
+            elif wp["name"] == "TARGET" and mission == "SEAD":
+                w.tasks.append(task.EngageTargets(max_distance=40000,
+                                                  targets=[task.Targets.All.GroundUnits.AirDefence]))
+            elif wp["name"] == "TARGET":
+                w.tasks.append(task.EngageTargets(max_distance=15000, targets=[task.Targets.All.GroundUnits]))
+        if a["delay"] > 0:
+            g.late_activation = True
+            t = TriggerOnce(comment=f"Launch {a['id']}")
+            t.add_condition(condition.TimeAfter(a["delay"]))
+            t.add_action(action.ActivateGroup(g.id))
+            B.m.triggerrules.triggers.append(t)
+        route = [_ll(Point(a["x"], a["y"], B.terrain))] + [_ll(Point(w["x"], w["y"], B.terrain)) for w in a["route"]]
+        entry = {"name": f"{a['count']}x {a['type']} ({a['mission']})", "route": route}
+        if a["side"] == "blue":
+            B.b.friendly_air.append(entry)
+        else:
+            B.b.enemy_air.append(entry)
+
+
+def build(spec: MissionSpec, ambient: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
+    """Build a mission. `ambient`: the campaign's other flights (see war.ambient_flights)."""
     B = _Builder(spec)
     m, rng, home, level = B.m, B.rng, B.home, B.level
     player_type = unit_type(spec.aircraft)
@@ -574,7 +638,9 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
     roles = {"Strike": ("structure", "missile", "armor", "sam"), "CAS": ("armor", "shorad", "structure"),
              "SEAD": ("sam", "ewr", "shorad"), "CAP": ("ewr", "sam", "shorad", "armor"),
              "Intercept": (), "Free flight": ("armor", "shorad", "structure", "sam")}[mt]
-    objective = B.pick_site(roles, near_km, far_km, front=True) if roles else None
+    objective = _ato_objective(B, spec) if spec.flight else None
+    if objective is None and roles:
+        objective = B.pick_site(roles, near_km, far_km, front=True)
     if objective is None and roles and heli:
         # Nothing of the right kind in helicopter range: take the nearest enemy position of any kind.
         objective = B.pick_site(roles + ("armor", "shorad", "structure", "sam", "ewr", "missile"), 3, 150, front=True)
@@ -600,6 +666,10 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
                                              start_type=start, group_size=spec.flight_size)
         player.points[0].name = home.name
     player.units[0].set_player()
+    if spec.flight:  # the campaign tracks this flight's losses too
+        for i, u in enumerate(player.units):
+            u.name = f"MBF:{spec.flight}:{i + 1}"
+            B.tracked_units.append(u.name)
     for wingman in player.units[1:]:
         wingman.skill = Skill.High
     loadout, stores = _arm(player, player_type, mt, maintask, spec.loadout)
@@ -692,6 +762,11 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
                                f"at the objective, {where}, opening the corridor for follow-on strikes, and recovers.")
         b.situation.append(f"An enemy surface-to-air missile site covers the approaches to {enemy_field.name}.")
         defended_point = None  # the target is the defence
+    elif mt == "CAP" and spec.flight:
+        b.mission_statement = f"{flight} holds CAP at the station, {where}, and engages enemy aircraft entering the area."
+        b.situation.append("Enemy flights in the area are shown on the map; expect more from the enemy's ATO.")
+        defended_point = None
+        B.target_groups = []
     elif mt == "CAP":
         waves = []
         for ptype, pairs in CAP_BANDITS[level]:
@@ -795,14 +870,14 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
             B.activate_on_entry("Enemy scramble", [qra], objective, 40 * 1852, text, public=True)
             b.threats.append({"name": f"2x {ptype.id} (alert)", "kind": "AIR", **_ll(qra_field.position),
                               "range_nm": None, "note": f"On alert at {qra_field.name}; launches when you approach."})
-        if level >= 5 and mt not in ("CAP", "Intercept") and not heli:
+        if level >= 5 and mt not in ("CAP", "Intercept") and not heli and not spec.flight:
             pair = B.bandits("Enemy CAP", planes.Su_27, 2, enemy_field.position, objective)
             b.enemy_air.append({"name": "2x Su-27", "route": [_ll(p.position) for p in pair.points]})
             b.threats.append({"name": "2x Su-27", "kind": "AIR", **_ll(objective), "range_nm": None,
                               "note": "Standing enemy CAP over the objective area."})
 
     # ---- friendly AI flights ----
-    if level >= 3 and mt in ("Strike", "CAS", "SEAD", "Intercept") and not heli:
+    if level >= 3 and mt in ("Strike", "CAS", "SEAD", "Intercept") and not heli and not spec.flight:
         cap = m.patrol_flight(B.blue, "Friendly CAP", planes.F_15C, None,
                               home.position.point_from_heading(heading_out, distance * 0.3),
                               home.position.point_from_heading(heading_out, distance * 0.7),
@@ -810,7 +885,7 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
         _arm(cap, planes.F_15C, "CAP", task.CAP)
         b.friendly_air.append({"name": "2x F-15C (friendly CAP)", "route": [_ll(p.position) for p in cap.points]})
         b.execution.append("A friendly F-15C pair (callsign set by DCS) holds CAP along the ingress route.")
-    if level >= 4 and mt in ("Strike", "CAS") and not heli:
+    if level >= 4 and mt in ("Strike", "CAS") and not heli and not spec.flight:
         sead = m.flight_group_inflight(B.blue, "Friendly SEAD", planes.F_16C_50,
                                        home.position.point_from_heading(heading_out, 15000), 7000, 850,
                                        maintask=task.SEAD, group_size=2)
@@ -854,6 +929,11 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
                  "cloud_base_ft": round(2500 * M_TO_FT, -2) if wx is not None else None,
                  "visibility": "10+ km", "temp_c": round(m.weather.season_temperature)}
 
+    if ambient:
+        add_ambient(B, ambient)
+        airborne = sum(1 for a in ambient if a["delay"] == 0)
+        b.notes.append(f"Campaign ATO: {airborne} other flights are airborne at mission start and "
+                       f"{len(ambient) - airborne} more launch during the mission.")
     if B.sc:
         for n in B.sc.blue_fields:
             if n in B.terrain.airports:

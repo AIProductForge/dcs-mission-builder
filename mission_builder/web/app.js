@@ -580,6 +580,18 @@ async function boot() {
 
   setInterval(() => api("/api/ping", {}).catch(() => setStatus("Mission Builder has stopped. Relaunch it to continue.", "err")), 15000);
   api("/api/ping", {}).catch(() => {});
+  if (location.hash === "#current") {  // opened from the campaign map: show the flight just taken
+    try {
+      const cur = await api("/api/current");
+      await setValues(cur.values);
+      state.locks = new Set(FIELDS);
+      renderPins();
+      renderBriefing(cur.briefing, cur.values);
+      $("btn-save").disabled = true;
+      setStatus("Campaign flight. Its .miz is already saved; fly it in DCS.", "ok");
+      return;
+    } catch (e) { /* nothing built yet: fall through to a fresh mission */ }
+  }
   // Pick up flights as they finish (the server reads dcs.log on each call).
   setInterval(() => api("/api/campaign").then(takeCampaigns).catch(() => {}), 20000);
   await generate(false);

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="war.css">
+</head>
+<body class="war">
+<aside class="tasking warpanel" aria-label="Campaign">
+  <header class="tasking-head">
+    <div class="tasking-kicker">DCS MISSION BUILDER · <a href="index.html">Tasking</a></div>
+    <h1>Air war</h1>
+    <div class="field nopin"><label for="theatre">Theatre</label><select id="theatre"></select></div>
+    <p class="campaign-line" id="scenario"></p>
+  </header>
+
+  <section class="clock" aria-label="Campaign clock">
+    <div class="clock-face"><span id="clock">—</span><span id="clock-state" class="clock-state"></span></div>
+    <div class="clock-buttons" role="group" aria-label="Clock speed">
+      <button class="btn" id="btn-run" type="button">Run</button>
+      <button class="btn rate" data-rate="1" type="button">1×</button>
+      <button class="btn rate" data-rate="4" type="button">4×</button>
+      <button class="btn rate" data-rate="16" type="button">16×</button>
+      <button class="btn rate" data-rate="64" type="button">64×</button>
+      <button class="btn rate" data-rate="256" type="button">256×</button>
+    </div>
+  </section>
+
+  <section class="dcs-banner" id="dcs-banner" hidden>
+    <div class="campaign-kicker">FLIGHT OUT TO DCS</div>
+    <p id="dcs-text"></p>
+    <div class="campaign-actions">
+      <a class="btn" id="btn-briefing" href="index.html#current">Briefing</a>
+      <button class="btn" id="btn-apply" type="button" title="Apply what dcs.log shows so far">Apply results</button>
+      <button class="btn ghost danger" id="btn-release" type="button">Give back to AI</button>
+    </div>
+  </section>
+
+  <section class="selected" id="selected" hidden>
+    <div class="campaign-kicker">SELECTED FLIGHT</div>
+    <h2 id="sel-title"></h2>
+    <p class="campaign-line" id="sel-text"></p>
+    <button class="btn primary" id="btn-fly" type="button">Fly this flight</button>
+  </section>
+
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+
+  <div class="campaign-sub">Air tasking order</div>
+  <div class="ato-filter" role="group" aria-label="Show">
+    <label><input type="checkbox" id="show-blue" checked> Friendly</label>
+    <label><input type="checkbox" id="show-red" checked> Enemy</label>
+    <label><input type="checkbox" id="show-done"> Finished</label>
+  </div>
+  <table class="ato" id="ato"><thead><tr><th>T/O</th><th>Flight</th><th>Task</th><th>Status</th></tr></thead><tbody></tbody></table>
+
+  <div class="campaign-sub">Front</div>
+  <ul class="zones" id="zones"></ul>
+
+  <div class="campaign-sub">Squadrons</div>
+  <table class="sqn" id="sqn"><tbody></tbody></table>
+
+  <div class="campaign-sub">Log</div>
+  <ul class="events" id="log"></ul>
+  <div class="campaign-actions"><button id="btn-reset" class="btn ghost danger" type="button">Reset map</button></div>
+</aside>
+
+<main class="warmap">
+  <div id="map" class="map" role="img" aria-label="Campaign map"></div>
+  <div class="map-legend">
+    <span><i class="lg airfield blue"></i>Friendly airfield</span><span><i class="lg airfield red"></i>Enemy airfield</span>
+    <span><i class="dot blue"></i>Friendly site</span><span><i class="dot red"></i>Enemy site</span>
+    <span><i class="dot dead"></i>Destroyed</span><span><i class="plane blue"></i>Friendly flight</span>
+    <span><i class="plane red"></i>Enemy flight</span>
+  </div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="war.js"></script>
+</body>
+</html>

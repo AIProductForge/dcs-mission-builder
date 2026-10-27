@@ -9,6 +9,12 @@ POST /api/generate {values, locks, reroll}  -> {values, briefing}
 POST /api/save                               -> {path}; registers the sortie with the map's campaign
 POST /api/campaign/check {force}             apply results now (force: even if the flight hasn't ended)
 POST /api/campaign/reset {theatre}           start that map's campaign again from its baseline
+GET  /war.html                          the campaign map: the air war moving, the ATO, the clock
+GET  /api/war?theatre=                  that map's war: clock, airfields, sites, squadrons, flights, log
+POST /api/war/clock {theatre, rate, paused}  run, pause or change the clock's speed
+POST /api/war/fly {theatre, flight}          take a planned friendly flight: builds and saves its .miz
+POST /api/war/release {theatre}              give a taken flight back to the AI
+GET  /api/current                       the last mission built (for the briefing page)
 POST /api/ping                               keeps the server alive while the page is open
 
 The server shuts itself down a minute after the last page stops pinging, so
@@ -81,14 +87,58 @@ class State:
             base = campaign.baseline(theatre, found)
             self.baselines[theatre] = base
             self.campaigns[theatre] = campaign.Campaign.load_or_new(theatre, base, TERRAINS[theatre]())
+        from . import war
+        self.war = war
+        self._blue_types = None
+        for theatre, c in self.campaigns.items():
+            if "war" not in c.data:
+                self.init_war(c)
+                c.save()
         generator.SCENARIOS.clear()
         for theatre in self.campaigns:
             self.refresh_view(theatre)
+        self.active_theatre: str | None = None   # the map the campaign page is showing; only it runs
         self.seen_logs: set[str] = set()
         self.lock = threading.RLock()
         self.current = None          # (spec, mission, briefing) of the last generate
         self.last_ping = time.time()
         self.page_seen = False
+
+    # Types the player owns that can fly campaign missions, one per module, best known first.
+    PREFERRED = ["F-16C_50", "FA-18C_hornet", "F-15C", "F-15ESE", "A-10A", "F-14B", "F-4E-45MC", "Su-27",
+                 "MiG-29S", "Su-25T", "J-11A", "Su-33", "AH-64D_BLK_II", "Ka-50_3", "Mi-24P"]
+
+    ROLE_LIMITS = {"F-15C": ["CAP"], "Su-27": ["CAP"], "J-11A": ["CAP"], "Su-33": ["CAP"], "MiG-29S": ["CAP"],
+                   "MiG-29A": ["CAP"], "MiG-29G": ["CAP"], "A-10A": ["CAS", "Strike"], "Su-25": ["CAS", "Strike"],
+                   "F-14B": ["CAP", "Strike"], "F-15ESE": ["Strike", "CAP"], "F-4E-45MC": ["Strike", "CAP"]}
+
+    def blue_types(self) -> list[tuple[str, list[str], bool]]:
+        if self._blue_types is None:
+            g = self.gen
+            order = {t: i for i, t in enumerate(self.PREFERRED)}
+            jets, helis, modules = [], [], set()
+            for a in sorted(self.owned, key=lambda a: (order.get(a, 99), a)):
+                if self.modules.get(a, a) in modules:
+                    continue
+                heli = g.is_helicopter(a)
+                names = g.loadouts(a)
+                missions = [mt for mt in ("CAP", "Strike", "SEAD", "CAS") if any(g._suits(n, mt) for n in names)]
+                if heli:
+                    missions = [mt for mt in missions if mt in ("Strike", "CAS")]
+                if a in self.ROLE_LIMITS:  # loadout names alone would put an F-15C on strike
+                    missions = [mt for mt in missions if mt in self.ROLE_LIMITS[a]]
+                if not missions:
+                    continue
+                modules.add(self.modules.get(a, a))
+                (helis if heli else jets).append((a, missions, heli))
+            self._blue_types = jets[:6] + helis[:1]
+        return self._blue_types
+
+    def init_war(self, c) -> None:
+        from .inventory import TERRAINS
+        t = TERRAINS[c.theatre]()
+        jet_fields = {n for n, a in t.airports.items() if a.runways and any(p.airplanes for p in a.parking_slots)}
+        self.war.init(c, self.blue_types(), jet_fields)
 
     def refresh_view(self, theatre: str) -> None:
         """What the generator sees for this map: the campaign as it stands now."""
@@ -104,6 +154,8 @@ class State:
                                                                   force).items():
                     sortie = next(s for s in c.data["sorties"] if s["id"] == sid)
                     changes += c.apply(sortie, dead, source) or [f"{len(dead)} enemy units destroyed."]
+                    changes += self.war.after_sortie(c, sortie, dead)
+                    c.save()
                     self.refresh_view(theatre)
         return changes
 
@@ -114,6 +166,7 @@ class State:
         from .inventory import TERRAINS
         with self.lock:
             c = self.campaign_mod.Campaign.new(theatre, self.baselines[theatre], TERRAINS[theatre]())
+            self.init_war(c)
             c.save()
             self.campaigns[theatre] = c
             self.refresh_view(theatre)
@@ -158,8 +211,89 @@ class State:
             mission.save(str(path))
             c = self.campaigns.get(spec.terrain)
             if c and briefing.sortie and not any(x["id"] == briefing.sortie for x in c.data["sorties"]):
-                c.register_sortie(briefing.sortie, str(path), briefing.mission_type, spec.aircraft, briefing.tracked)
+                c.register_sortie(briefing.sortie, str(path), briefing.mission_type, spec.aircraft, briefing.tracked,
+                                  flight=spec.flight)
             return {"path": str(path), "sortie": briefing.sortie}
+
+    # --- the air war ------------------------------------------------------------------
+
+    def war_state(self, theatre: str) -> dict:
+        with self.lock:
+            self.active_theatre = theatre
+            # While a flight is out to DCS, look for its results now and then.
+            if self.campaigns[theatre].data["war"]["mode"] == "in_dcs" and time.time() - getattr(self, "_checked", 0) > 15:
+                self._checked = time.time()
+                self.check_results()
+            return self.war.snapshot(self.campaigns[theatre])
+
+    def set_clock(self, theatre: str, rate=None, paused=None) -> dict:
+        with self.lock:
+            w = self.campaigns[theatre].data["war"]
+            if rate is not None:
+                w["rate"] = max(1, min(256, int(rate)))
+            if paused is not None:
+                if not paused and w["mode"] == "in_dcs":
+                    raise RuntimeError("A flight is out to DCS. Fly it, or give it back to the AI, first.")
+                w["paused"] = bool(paused)
+            self.campaigns[theatre].save()
+            return self.war.snapshot(self.campaigns[theatre])
+
+    def fly(self, theatre: str, flight_id: str) -> dict:
+        """Take a planned blue flight: the clock jumps to its takeoff and its mission is saved."""
+        g, war = self.gen, self.war
+        with self.lock:
+            c = self.campaigns[theatre]
+            if c.data["war"]["mode"] == "in_dcs":
+                raise RuntimeError("Another flight is already out to DCS. Fly it or give it back first.")
+            f = war.take_flight(c, flight_id)
+            try:
+                self.refresh_view(theatre)
+                when = war.clock_datetime(c)
+                rng = random.Random()
+                spec = g.MissionSpec(
+                    terrain=theatre, aircraft=f["type"], airport=f["base"], scenario=self.baselines[theatre].name,
+                    mission_type=f["mission"], complexity=3, start="Ramp, hot", flight_size=f["count"],
+                    date=when.date().isoformat(), hour=when.hour, minute=when.minute,
+                    weather=rng.choice(["Clear", "Clear", "Scattered clouds", "Overcast"]), enemy_skill="Good",
+                    awacs=True, tanker=False, seed=rng.randrange(1, 2**31), flight=f["id"],
+                    target_site=f["target"] or "", target_xy=f["target_xy"])
+                ambient = war.ambient_flights(c, f["id"])
+                try:
+                    mission, briefing = g.build(spec, ambient)
+                except g.NoParkingSlotError:
+                    spec.start = "In the air"
+                    mission, briefing = g.build(spec, ambient)
+                self.current = (spec, mission, briefing)
+                saved = self.save()
+            except Exception:
+                war.release_flight(c)
+                raise
+            c.save()
+            return {"path": saved["path"], "values": asdict(spec), "briefing": briefing.to_dict(),
+                    "war": war.snapshot(c)}
+
+    def release(self, theatre: str) -> dict:
+        with self.lock:
+            c = self.campaigns[theatre]
+            self.war.release_flight(c)
+            c.save()
+            return self.war.snapshot(c)
+
+    def tick(self, dt_real: float) -> None:
+        """Run the shown map's war clock (only while a page is open)."""
+        with self.lock:
+            t = self.active_theatre
+            if not t or time.time() - self.last_ping > 30:
+                return
+            c = self.campaigns[t]
+            w = c.data["war"]
+            if w["paused"] or w["mode"] != "running":
+                return
+            if self.war.advance(c, w["clock"] + dt_real * w["rate"]):
+                self.refresh_view(t)
+            if time.time() - getattr(self, "_saved_at", 0) > 5:
+                c.save()
+                self._saved_at = time.time()
 
 
 def make_handler(state: State):
@@ -191,6 +325,13 @@ def make_handler(state: State):
                 if url.path == "/api/campaign":
                     state.check_results()
                     return self._json(200, state.campaign_state())
+                if url.path == "/api/war":
+                    return self._json(200, state.war_state(parse_qs(url.query)["theatre"][0]))
+                if url.path == "/api/current":
+                    if state.current is None:
+                        return self._json(404, {"error": "No mission built yet."})
+                    spec, _, briefing = state.current
+                    return self._json(200, {"values": asdict(spec), "briefing": briefing.to_dict()})
                 if url.path == "/api/loadouts":
                     aircraft = parse_qs(url.query)["aircraft"][0]
                     g = state.gen
@@ -223,6 +364,12 @@ def make_handler(state: State):
                 if self.path == "/api/campaign/check":
                     changes = state.check_results(bool(body.get("force")))
                     return self._json(200, {"changes": changes, "campaigns": state.campaign_state()})
+                if self.path == "/api/war/clock":
+                    return self._json(200, state.set_clock(body["theatre"], body.get("rate"), body.get("paused")))
+                if self.path == "/api/war/fly":
+                    return self._json(200, state.fly(body["theatre"], body["flight"]))
+                if self.path == "/api/war/release":
+                    return self._json(200, state.release(body["theatre"]))
                 if self.path == "/api/campaign/reset":
                     state.reset_campaign(body["theatre"])
                     return self._json(200, {"campaigns": state.campaign_state()})
@@ -238,6 +385,18 @@ class Server(ThreadingHTTPServer):
     # On Windows SO_REUSEADDR lets a second server bind a port that is already in use,
     # which would hide the "already running" case below.
     allow_reuse_address = sys.platform != "win32"
+
+
+def _clock(state: State) -> None:
+    last = time.time()
+    while True:
+        time.sleep(0.5)
+        now = time.time()
+        try:
+            state.tick(now - last)
+        except Exception:
+            logging.exception("war clock tick failed")
+        last = now
 
 
 def _watchdog(server: ThreadingHTTPServer, state: State) -> None:
@@ -266,6 +425,7 @@ def main() -> None:
         webbrowser.open(f"http://127.0.0.1:{port}/")
         return
     threading.Thread(target=_watchdog, args=(server, state), daemon=True).start()
+    threading.Thread(target=_clock, args=(state,), daemon=True).start()
     if "--no-browser" not in sys.argv:
         webbrowser.open(f"http://127.0.0.1:{port}/")
     logging.info("serving on http://127.0.0.1:%d", port)

@@ -1,0 +1,66 @@
+/* Campaign map page. Builds on app.css (tokens, panel, buttons, zones, events). */
+body.war { grid-template-columns: 380px 1fr; }
+.warpanel { padding-bottom: 28px; }
+.warpanel a { color: var(--accent); }
+.field.nopin { grid-template-columns: 1fr; }
+.warpanel .campaign-sub { margin-top: 16px; }
+
+.clock { border-top: 1px solid var(--panel-line); border-bottom: 1px solid var(--panel-line); padding: 10px 0; margin: 6px 0 10px; }
+.clock-face { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+#clock { font-family: var(--cond); font-weight: 700; font-size: 26px; letter-spacing: .04em; }
+.clock-state { font-size: 11.5px; color: var(--panel-muted); text-transform: uppercase; letter-spacing: .1em; }
+.clock-state.live { color: #9fd39a; }
+.clock-buttons { display: grid; grid-template-columns: 1.4fr repeat(5, 1fr); gap: 5px; }
+.clock-buttons .btn { padding: 6px 0; font-size: 13px; }
+.clock-buttons .btn.on { border-color: var(--pin); color: var(--pin); }
+#btn-run.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+.dcs-banner, .selected { border: 1px solid var(--panel-line); border-radius: 4px; padding: 10px; margin: 10px 0; background: #10120f; }
+.dcs-banner { border-color: var(--pin); }
+.dcs-banner p { font-size: 12px; line-height: 1.5; margin: 4px 0 8px; }
+.dcs-banner .btn { text-align: center; text-decoration: none; font-size: 13px; padding: 6px 4px; }
+.dcs-banner .campaign-actions { grid-template-columns: 1fr 1fr 1fr; }
+.selected h2 { font-family: var(--cond); font-size: 19px; margin: 2px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
+.selected .btn { width: 100%; }
+
+.ato-filter { display: flex; gap: 12px; font-size: 11.5px; color: var(--panel-muted); margin-bottom: 6px; }
+.ato-filter input { accent-color: var(--accent); vertical-align: -2px; }
+table.ato, table.sqn { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+table.ato th { text-align: left; font-family: var(--cond); font-weight: 600; letter-spacing: .08em; color: var(--panel-muted);
+  text-transform: uppercase; border-bottom: 1px solid var(--panel-line); padding: 3px 4px; }
+table.ato td, table.sqn td { padding: 4px; border-bottom: 1px solid #262a22; vertical-align: top; }
+table.ato tbody tr { cursor: pointer; }
+table.ato tbody tr:hover td { background: #22261e; }
+table.ato tr.sel td { background: #2c3125; }
+table.ato tr.done td { color: var(--panel-muted); }
+.side { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.side.blue { background: #5b8fd6; }
+.side.red { background: #e0574d; }
+.st { text-transform: uppercase; font-size: 10.5px; letter-spacing: .06em; }
+.st.airborne { color: #9fd39a; }
+.st.lost { color: #f08a80; }
+.st.player { color: var(--pin); }
+.zones li .count { white-space: nowrap; }
+.zones li.blueside .bar span { background: #5b8fd6; }
+
+.warmap { position: relative; height: 100vh; }
+.warmap .map { height: 100%; width: 100%; border: 0; }
+.map-legend { position: absolute; left: 12px; bottom: 12px; z-index: 500; display: flex; flex-wrap: wrap; gap: 6px 12px;
+  background: rgba(27, 30, 25, .88); color: var(--panel-text); font-size: 11px; padding: 6px 10px; border-radius: 3px; max-width: 70%; }
+.map-legend i { display: inline-block; margin-right: 4px; vertical-align: -1px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot.blue { background: #1f4e8c; } .dot.red { background: #b3261e; } .dot.dead { border: 1.5px solid #8a8a80; }
+i.plane { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 10px solid; }
+i.plane.blue { border-bottom-color: #1f4e8c; } i.plane.red { border-bottom-color: #b3261e; }
+
+.flight-icon { position: relative; }
+.flight-icon svg { display: block; filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff); }
+.flight-tag { position: absolute; left: 14px; top: -4px; white-space: nowrap; font: 600 10.5px var(--mono); color: #1d1d1b;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff; pointer-events: none; }
+.flight-icon.sel .flight-tag { color: #000; font-size: 12px; }
+
+@media (max-width: 900px) {
+  body.war { grid-template-columns: 1fr; }
+  .warpanel { position: static; height: auto; }
+  .warmap { height: 70vh; order: -1; }
+}

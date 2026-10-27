@@ -39,28 +39,49 @@ baseline (read from your Liberation install and cached in `scenarios_cache.json`
 | Nevada | Exercise Vegas Nerve | Tonopah against Nellis, Creech, Groom Lake, Boulder City |
 | Marianas | Operation Velvet Thunder | Guam against Rota, Saipan, Tinian |
 
-The baseline gives each side its airfields and the enemy's land positions (SAM sites, radars,
-armour, depots...). Every enemy position belongs to the zone of its nearest enemy airfield.
-Missions fly from your airfields and target positions in the front-line zones (the enemy
-fields closest to your territory).
-
-**After each flight.** Save .miz registers the mission as a sortie. The mission logs each kill of
-a tracked enemy unit to `Saved Games\DCS\Logs\dcs.log` (a mission-start script using `env.info`,
-which works in a stock DCS install; no MissionScripting.lua changes). The app reads the log every
-20 s while it's open, and DCS's archived `dcs.log-*.zip` files, so results also arrive after DCS
-has been restarted. A flight is applied when it ends (the mission-end event, or the next DCS
-start); **Apply now** applies the flight in progress from what's logged so far.
+The baseline gives each side its airfields and land positions (SAM sites, radars, armour,
+depots...). Every position belongs to the zone of its side's nearest airfield, and every airfield's
+zone holds at least 12 positions (topped up with a garrison on the field).
 
 - A position is destroyed when at least half of the units placed on it in one sortie are killed.
-  Destroyed positions stay destroyed.
-- An enemy airfield is captured when 60% of the positions in its zone are destroyed, and 60% of
-  its SAM and early-warning radar positions are among them (armour alone won't take a field).
-  It becomes a home field, whatever is left of its zone withdraws, and the front moves to the
-  next zones. The campaign panel shows each field's progress, e.g. `12/48 · SAM/radar 5/23`.
-- Enemy fields with no positions of their own get a garrison on the field, so each must be taken.
-- Capture every enemy airfield to win. **Reset map** starts that map's campaign again.
-- Free flight missions, and missions whose targets aren't on a baseline position, don't change
-  the campaign. The enemy doesn't rebuild or counter-attack, and your losses aren't tracked.
+  The owner repairs it 12–30 campaign hours later unless its airfield falls first.
+- An airfield is captured when 60% of the positions in its zone are destroyed, and 60% of its
+  SAM and early-warning radar positions are among them (armour alone won't take a field).
+  What's left of the zone withdraws, the new owner moves in a garrison of 8, and the field
+  can't change hands again for 24 campaign hours.
+- Take every enemy airfield to win; lose all of yours and the campaign is lost.
+  **Reset map** starts that map's campaign again.
+
+## The air war (campaign map)
+**Campaign map** (`war.html`, linked from the Tasking panel) shows the war as it runs, in the
+spirit of Falcon BMS's dynamic campaign:
+
+- **Clock.** Run or pause it at 1×, 4×, 16×, 64× or 256×. It runs only while the page is open.
+- **Squadrons.** Blue flies aircraft you own (one squadron per module, up to six jets and a
+  helicopter); red flies MiG-29S, Su-27, Su-24M, Su-25T, Su-25 and Mi-24V. Squadrons start with
+  12 aircraft and get 3 back a day.
+- **ATO.** Every campaign hour each side plans a CAP over the front plus strikes, SEAD and CAS
+  against the other side's front-line positions (blue 2 an hour, red 1). The map shows each flight
+  from takeoff to landing; click one for its route, target and result.
+- **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
+  odds depend on the SAMs, short-range air defence and radar around the target and on enemy
+  CAP nearby. CAPs that meet fight it out.
+- **Fly this flight.** Pick any planned friendly flight. The clock jumps to its takeoff and
+  pauses, and its `.miz` is saved: you fly that flight against its planned target, with every
+  other flight that is airborne at that moment placed where the map shows it, and flights due to
+  launch in the next 90 minutes appearing over their bases on time. **Briefing** opens it on the
+  Tasking page. When the results come back (enemy units destroyed at the target, and aircraft
+  lost on both sides, from `dcs.log`), the war resumes from takeoff. **Give back to AI** hands
+  the flight back unflown.
+
+Left alone, the war moves slowly and not always your way; your sorties are what tip it.
+
+**Results from DCS.** Saved missions log each kill of a tracked unit to
+`Saved Games\DCS\Logs\dcs.log` (a mission-start script using `env.info`, which works in a
+stock DCS install; no MissionScripting.lua changes). The app reads the live log and DCS's
+archived `dcs.log-*.zip` files. A flight is applied when it ends (the mission-end event, or the
+next DCS start); **Apply now** / **Apply results** applies the flight in progress from what's
+logged so far. Missions made on the Tasking page count too (ground kills only).
 
 Campaign state is kept in `campaign/<map>.json` (not in git).
 
@@ -91,9 +112,10 @@ Date matters for some systems: the Modern F-15E SIT/JTIDS mod needs a mission da
 - `mission_builder/inventory.py`: owned aircraft, terrains, loadout folders
 - `mission_builder/scenarios.py`: blue/red airfields and land positions from Liberation campaigns
 - `mission_builder/campaign.py`: per-map campaign state, the results script, reading results from dcs.log
+- `mission_builder/war.py`: the air war: clock, squadrons, ATO planning, auto-resolution
 - `mission_builder/generator.py`: builds the mission (no UI, can be scripted)
 - `mission_builder/server.py`: local web server and JSON API (127.0.0.1 only)
-- `mission_builder/web/`: the briefing page (HTML, CSS, JS)
+- `mission_builder/web/`: the briefing page (`index.html`) and the campaign map (`war.html`)
 - `mission_builder/app.py`: the old Tkinter window (superseded, still works)
 - `config.json`: paths (including `dcs_logs`) and your last choices
 - `campaign/`: each map's campaign state
