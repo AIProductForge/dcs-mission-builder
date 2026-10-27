@@ -51,19 +51,23 @@
   </section>
 
   <details class="plan" id="plan">
-    <summary>Plan a strike</summary>
-    <p class="campaign-line">Any friendly squadron, any enemy site: front line or deep behind it. Bombers fly only what you schedule here.
-      Click an enemy site on the map to pick it.</p>
-    <div class="field nopin"><label for="p-squadron">Squadron</label><select id="p-squadron"></select></div>
-    <div class="field nopin"><label for="p-target">Target</label><select id="p-target"></select></div>
+    <summary>Frag a mission</summary>
+    <p class="campaign-line">Add a mission to the ATO: any friendly squadron, any task. Strikes can go deep behind the front;
+      bombers fly only what you frag here. Click an enemy site on the map to target it, or a spot on the map for a CAP station.</p>
+    <div class="plan-row">
+      <div class="field nopin"><label for="p-squadron">Squadron</label><select id="p-squadron"></select></div>
+      <div class="field nopin"><label for="p-mission">Mission</label><select id="p-mission"></select></div>
+    </div>
+    <div class="field nopin" id="p-target-row"><label for="p-target">Target</label><select id="p-target"></select></div>
+    <div class="field nopin" id="p-station-row" hidden><label for="p-station">CAP station</label><select id="p-station"></select></div>
     <div class="plan-row">
       <div class="field nopin"><label for="p-count">Aircraft</label><input id="p-count" type="number" min="1" max="12" value="2"></div>
       <div class="field nopin"><label for="p-when">Timing</label>
-        <select id="p-when"><option value="asap">As soon as possible</option><option value="tot">Time on target…</option></select></div>
+        <select id="p-when"><option value="asap">As soon as possible</option><option value="tot" id="p-when-tot">Time on target…</option></select></div>
     </div>
     <div class="plan-row" id="p-tot-row" hidden>
       <div class="field nopin"><label for="p-day">Day</label><select id="p-day"></select></div>
-      <div class="field nopin"><label for="p-time">On target (local)</label><input id="p-time" type="time" value="02:00"></div>
+      <div class="field nopin"><label for="p-time" id="p-time-label">On target (local)</label><input id="p-time" type="time" value="02:00"></div>
     </div>
     <p class="campaign-line" id="p-note"></p>
     <button class="btn primary" id="btn-schedule" type="button">Add to ATO</button>

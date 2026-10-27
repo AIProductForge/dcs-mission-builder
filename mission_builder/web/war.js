@@ -74,7 +74,15 @@ function initMap() {
   L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
     maxZoom: 13, attribution: 'Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | style © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
   }).addTo(S.map);
-  for (const k of ["sites", "fields", "route", "flights"]) S.layers[k] = L.layerGroup().addTo(S.map);
+  for (const k of ["sites", "fields", "route", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
+  // With the frag form open on a CAP, a click on the map sets the station.
+  S.map.on("click", (e) => {
+    if (!$("plan").open || $("p-mission").value !== "CAP") return;
+    S.capPoint = [e.latlng.lat, e.latlng.lng];
+    $("p-station").value = "point";
+    drawCapPoint();
+    planNote();
+  });
 }
 
 function planeIcon(f, hdg, selected) {
@@ -253,7 +261,7 @@ function renderClock() {
   $("btn-run").classList.toggle("on", !s.paused);
   $("btn-run").disabled = s.mode !== "running";
   for (const b of document.querySelectorAll(".rate")) b.classList.toggle("on", Number(b.dataset.rate) === s.rate);
-  $("clock-state").textContent = s.mode === "in_dcs" ? "in DCS" : s.paused ? "paused" : `running ${s.rate}×`;
+  $("clock-state").textContent = S.offline ? "server stopped" : s.mode === "in_dcs" ? "in DCS" : s.paused ? "paused" : `running ${s.rate}×`;
   $("clock-state").classList.toggle("live", running());
   $("scenario").textContent = `${s.scenario} · losses: friendly ${s.stats.blue_lost}, enemy ${s.stats.red_lost}` +
                               (s.won ? " · CAMPAIGN WON" : s.lost ? " · CAMPAIGN LOST" : "");
@@ -263,19 +271,66 @@ function renderClock() {
     "Fly it in DCS: the war stays paused and resumes from takeoff once the results are read from dcs.log.";
 }
 
-// ---------- planning strikes ----------
+// ---------- fragging missions ----------
+function drawCapPoint() {
+  if (!S.map) return;
+  S.layers.plan.clearLayers();
+  if ($("plan").open && $("p-mission").value === "CAP" && $("p-station").value === "point" && S.capPoint) {
+    L.circleMarker(S.capPoint, { radius: 9, color: COLORS.blue, weight: 2, dashArray: "3 3", fill: false })
+      .bindTooltip("New CAP station", { className: "map-tip" }).addTo(S.layers.plan);
+  }
+}
+
+function renderMissions() {
+  const sq = S.snap.squadrons.find((x) => x.id === $("p-squadron").value);
+  const sel = $("p-mission"), keep = sel.value;
+  sel.innerHTML = "";
+  for (const m of (sq ? sq.missions : [])) {
+    const o = document.createElement("option");
+    o.value = o.textContent = m;
+    sel.appendChild(o);
+  }
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  const cap = sel.value === "CAP";
+  $("p-target-row").hidden = cap;
+  $("p-station-row").hidden = !cap;
+  $("p-when-tot").textContent = cap ? "Time on station…" : "Time on target…";
+  $("p-time-label").textContent = cap ? "On station (local)" : "On target (local)";
+  drawCapPoint();
+}
+
 function renderPlan() {
   const s = S.snap;
   const sqSel = $("p-squadron"), keepSq = sqSel.value;
   sqSel.innerHTML = "";
   for (const sq of s.squadrons) {
-    if (sq.side !== "blue" || !sq.total || !sq.missions.some((m) => m !== "CAP")) continue;
+    if (sq.side !== "blue" || !sq.total) continue;
     const o = document.createElement("option");
     o.value = sq.id;
     o.textContent = `${sq.type} · ${sq.base} · ${sq.available} ready${s.ai_only.includes(sq.type) ? " · AI" : ""}`;
     sqSel.appendChild(o);
   }
   if ([...sqSel.options].some((o) => o.value === keepSq)) sqSel.value = keepSq;
+  renderMissions();
+  const stSel = $("p-station"), keepSt = stSel.value;
+  stSel.innerHTML = "";
+  const pt = document.createElement("option");
+  pt.value = "point";
+  pt.textContent = S.capPoint ? "Point clicked on the map" : "Point on the map (click the map)";
+  stSel.appendChild(pt);
+  for (const side of ["blue", "red"]) {
+    const g = document.createElement("optgroup");
+    g.label = side === "blue" ? "Over a friendly airfield" : "Over an enemy airfield";
+    for (const f of s.fields.filter((x) => x.side === side)) {
+      const o = document.createElement("option");
+      o.value = "field:" + f.name;
+      o.textContent = f.name;
+      g.appendChild(o);
+    }
+    stSel.appendChild(g);
+  }
+  stSel.value = [...stSel.options].some((o) => o.value === keepSt) ? keepSt
+    : (s.fields.find((x) => x.side === "blue" && s.front.red.includes(x.name)) ? "field:" + s.fields.find((x) => x.side === "blue" && s.front.red.includes(x.name)).name : "point");
   const tSel = $("p-target"), keepT = tSel.value;
   tSel.innerHTML = "";
   const front = new Set(s.front.blue);
@@ -311,10 +366,13 @@ function planNote() {
   const sq = S.snap.squadrons.find((x) => x.id === $("p-squadron").value);
   $("p-count").max = sq ? Math.max(1, sq.available) : 12;
   const tot = planTot();
-  let note = sq && S.snap.ai_only.includes(sq.type) ? `${sq.type} is AI only in DCS; it flies this strike for you. ` : "";
+  const cap = $("p-mission").value === "CAP";
+  let note = sq && S.snap.ai_only.includes(sq.type) ? `${sq.type} is AI only in DCS; it flies this mission for you. ` : "";
+  if (cap) note += "Holds the station for an hour. ";
+  if (cap && $("p-station").value === "point" && !S.capPoint) note += "Click the map to place the station. ";
   if (tot !== null) {
     const hour = Number($("p-time").value.split(":")[0]);
-    note += `On target ${label(tot)}${hour >= 21 || hour < 5 ? " (night)" : ""}.`;
+    note += `${cap ? "On station" : "On target"} ${label(tot)}${hour >= 21 || hour < 5 ? " (night)" : ""}.`;
   }
   $("p-note").textContent = note;
 }
@@ -330,18 +388,35 @@ function planTot() {
 function pickTarget(site) {
   if (site.side !== "red" || !site.alive) return;
   if (!$("plan").open) { $("plan").open = true; renderPlan(); }
+  if ($("p-mission").value === "CAP") return;  // a map click places the CAP station instead
   $("p-target").value = site.id;
   setStatus(`Target: ${ROLE[site.role] || site.role} near ${site.zone}.`);
 }
 
-async function scheduleStrike() {
+async function fragMission() {
+  const mission = $("p-mission").value;
+  const body = { theatre: S.theatre, squadron: $("p-squadron").value, mission,
+                 count: Number($("p-count").value), tot: planTot() };
+  if (mission === "CAP") {
+    const st = $("p-station").value;
+    if (st === "point") {
+      if (!S.capPoint) { setStatus("Click the map to place the CAP station first.", "err"); return; }
+      body.station = S.capPoint;
+    } else {
+      body.field = st.slice("field:".length);
+    }
+  } else {
+    body.target = $("p-target").value;
+  }
   try {
-    const res = await api("/api/war/schedule", { theatre: S.theatre, squadron: $("p-squadron").value,
-      target: $("p-target").value, count: Number($("p-count").value), tot: planTot() });
+    const res = await api("/api/war/schedule", body);
     S.selected = res.flight;
+    S.capPoint = null;
     take(res.war, false);
     const f = res.war.flights.find((x) => x.id === res.flight);
-    setStatus(`${f.callsign} is on the ATO: takeoff ${label(f.takeoff)}, on target ${label(f.tot)}.`, "ok");
+    const when = mission === "CAP" ? `on station ${label(f.station)}` : `on target ${label(f.tot)}`;
+    setStatus(`${f.callsign} is on the ATO: takeoff ${label(f.takeoff)}, ${when}.`, "ok");
+    drawCapPoint();
   } catch (e) { setStatus(e.message, "err"); }
 }
 
@@ -373,7 +448,16 @@ async function refresh(full = false) {
     const snap = await api(`/api/war?theatre=${encodeURIComponent(S.theatre)}`);
     take(snap, full || !before || before.sites.filter((x) => x.alive).length !== snap.sites.filter((x) => x.alive).length ||
          JSON.stringify(before.fields) !== JSON.stringify(snap.fields));
-  } catch (e) { setStatus(e.message, "err"); }
+    if (S.offline) { S.offline = false; setStatus("Reconnected.", "ok"); }
+  } catch (e) {
+    // No server (stopped or not started): freeze the clock where it was and say so.
+    if (e instanceof TypeError) {
+      if (!S.offline && S.snap) { S.snap.clock = clockNow(); S.snap.paused = true; S.offline = true; renderClock(); }
+      setStatus("Mission Builder isn't running. Start it with DCS Mission Builder.bat; this page reconnects by itself.", "err");
+    } else {
+      setStatus(e.message, "err");
+    }
+  }
 }
 
 function take(snap, full) {
@@ -425,10 +509,13 @@ async function boot() {
     try { take(await api("/api/war/cancel", { theatre: S.theatre, flight: S.selected }), false); setStatus("Flight scrubbed."); }
     catch (e) { setStatus(e.message, "err"); }
   });
-  $("btn-schedule").addEventListener("click", scheduleStrike);
+  $("btn-schedule").addEventListener("click", fragMission);
+  $("p-squadron").addEventListener("change", () => { renderMissions(); planNote(); });
+  $("p-mission").addEventListener("change", () => { renderMissions(); planNote(); });
+  $("p-station").addEventListener("change", () => { drawCapPoint(); planNote(); });
   $("p-when").addEventListener("change", () => { $("p-tot-row").hidden = $("p-when").value !== "tot"; planNote(); });
   for (const id of ["p-squadron", "p-day", "p-time"]) $(id).addEventListener("change", planNote);
-  $("plan").addEventListener("toggle", () => { if ($("plan").open) renderPlan(); });
+  $("plan").addEventListener("toggle", () => { if ($("plan").open) renderPlan(); drawCapPoint(); });
   $("btn-release").addEventListener("click", async () => {
     try { take(await api("/api/war/release", { theatre: S.theatre }), false); setStatus("Flight handed back to the AI."); }
     catch (e) { setStatus(e.message, "err"); }

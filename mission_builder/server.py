@@ -14,7 +14,8 @@ GET  /api/war?theatre=                  that map's war: clock, airfields, sites,
 POST /api/war/clock {theatre, rate, paused}  run, pause or change the clock's speed
 POST /api/war/fly {theatre, flight}          take a planned friendly flight: builds and saves its .miz
 POST /api/war/release {theatre}              give a taken flight back to the AI
-POST /api/war/schedule {theatre, squadron, target, count, tot}  put a strike on the ATO (tot null = ASAP)
+POST /api/war/schedule {theatre, squadron, mission, count, tot, target | station | field}
+                                             frag a mission onto the ATO (tot null = ASAP)
 POST /api/war/cancel {theatre, flight}       scrub a friendly flight that hasn't taken off
 GET  /api/current                       the last mission built (for the briefing page)
 POST /api/ping                               keeps the server alive while the page is open
@@ -279,12 +280,23 @@ class State:
             return {"path": saved["path"], "values": asdict(spec), "briefing": briefing.to_dict(),
                     "war": war.snapshot(c)}
 
-    def schedule(self, theatre: str, squadron: str, target: str, count: int, tot) -> dict:
+    def schedule(self, theatre: str, squadron: str, mission: str, count: int, tot, target=None,
+                 station=None, field=None) -> dict:
         with self.lock:
             c = self.campaigns[theatre]
-            f = self.war.schedule(c, squadron, target, count, tot)
+            if field and not station:  # CAP over an airfield
+                station = c.data["field_pos"][field]
+            elif station and len(station) == 2 and abs(station[0]) <= 90 and abs(station[1]) <= 180:
+                station = self.latlon_to_xy(c, *station)  # a point clicked on the map
+            f = self.war.schedule(c, squadron, mission, count, tot, target, station)
             c.save()
             return {"flight": f["id"], "war": self.war.snapshot(c)}
+
+    @staticmethod
+    def latlon_to_xy(c, lat: float, lon: float) -> list[float]:
+        from dcs.mapping import LatLng, Point
+        p = Point.from_latlng(LatLng(lat, lon), c.terrain)
+        return [p.x, p.y]
 
     def cancel(self, theatre: str, flight: str) -> dict:
         with self.lock:
@@ -390,8 +402,10 @@ def make_handler(state: State):
                 if self.path == "/api/war/fly":
                     return self._json(200, state.fly(body["theatre"], body["flight"]))
                 if self.path == "/api/war/schedule":
-                    return self._json(200, state.schedule(body["theatre"], body["squadron"], body["target"],
-                                                          body.get("count", 2), body.get("tot")))
+                    return self._json(200, state.schedule(body["theatre"], body["squadron"],
+                                                          body.get("mission", "Strike"), body.get("count", 2),
+                                                          body.get("tot"), body.get("target"), body.get("station"),
+                                                          body.get("field")))
                 if self.path == "/api/war/cancel":
                     return self._json(200, state.cancel(body["theatre"], body["flight"]))
                 if self.path == "/api/war/release":

@@ -458,42 +458,70 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
 
 # --- strikes the player schedules --------------------------------------------------------
 
-def schedule(c: Campaign, squadron_id: str, site_id: str, count: int, tot: float | None) -> dict:
-    """Put a strike on the ATO: this squadron, this enemy site anywhere (front or deep), with
-    `count` aircraft, on target at campaign time `tot` (None: take off as soon as possible)."""
+def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float | None,
+             site_id: str | None = None, station=None) -> dict:
+    """Frag a mission onto the ATO: this squadron flies `mission` with `count` aircraft.
+    Strike/SEAD/CAS go against an enemy site anywhere (front or deep); CAP holds a station
+    ([x, y]) for an hour. `tot` is the campaign time on target / on station (None: as soon as
+    possible)."""
     w = _war(c)
     sq = next((x for x in w["squadrons"] if x["id"] == squadron_id and x["side"] == "blue"), None)
     if not sq or sq["total"] <= 0:
         raise RuntimeError("Pick a friendly squadron that still has aircraft.")
-    site = next((s for s in c.data["sites"] if s["id"] == site_id), None)
-    if not site or site["side"] != "red" or not site["alive"]:
-        raise RuntimeError("Pick an enemy site that is still standing.")
+    if mission not in sq["missions"]:
+        raise RuntimeError(f"{sq['type']} squadron flies {', '.join(sq['missions'])}, not {mission}.")
     count = int(count)
     if count < 1 or count > available(c, sq):
         raise RuntimeError(f"{sq['type']} squadron has {available(c, sq)} aircraft available.")
-    reach = BOMBER_RANGE if sq.get("manual") else RANGE["heli" if sq["heli"] else "jet"]
-    if _dist(c.data["field_pos"][sq["base"]], (site["x"], site["y"])) > reach:
-        raise RuntimeError(f"{site['zone']} is out of range for {sq['type']} from {sq['base']}.")
-    mission = "Strike" if "Strike" in sq["missions"] else sq["missions"][0]
+    site = None
     if mission == "CAP":
-        raise RuntimeError(f"{sq['type']} squadron only flies CAP.")
-    earliest = w["clock"] + 10 * 60
-    f = _new_flight(c, sq, mission, count, earliest, (site["x"], site["y"]), site["id"])
+        if not station:
+            raise RuntimeError("Pick a CAP station: an airfield, or click the map.")
+        target = (float(station[0]), float(station[1]))
+        where = _station_name(c, target)
+    else:
+        site = next((s for s in c.data["sites"] if s["id"] == site_id), None)
+        if not site or site["side"] != "red" or not site["alive"]:
+            raise RuntimeError("Pick an enemy site that is still standing.")
+        target = (site["x"], site["y"])
+        where = None
+    reach = BOMBER_RANGE if sq.get("manual") else RANGE["heli" if sq["heli"] else "jet"]
+    if _dist(c.data["field_pos"][sq["base"]], target) > reach:
+        raise RuntimeError(f"That's out of range for {sq['type']} from {sq['base']}.")
+    f = _new_flight(c, sq, mission, count, w["clock"] + 10 * 60, target, site["id"] if site else None)
+    if where:
+        f["target_name"] = where
+    key = "station" if mission == "CAP" else "tot"
     if tot is not None:  # shift the whole route so it arrives on time
-        shift = float(tot) - f["tot"]
+        shift = float(tot) - f[key]
         if shift < 0:
             w["flights"].remove(f)
-            raise RuntimeError(f"Too soon: the earliest time on target is {clock_label(c, f['tot'])}.")
+            raise RuntimeError(f"Too soon: the earliest time {'on station' if key == 'station' else 'on target'} "
+                               f"is {clock_label(c, f[key])}.")
         for r in f["route"]:
             r["t"] = round(r["t"] + shift, 1)
-        for k in ("takeoff", "land", "tot"):
-            f[k] = round(f[k] + shift, 1)
+        for k in ("takeoff", "land", "tot", "station", "off"):
+            if k in f:
+                f[k] = round(f[k] + shift, 1)
     f["scheduled"] = True
-    f["night"] = is_night(c, f["tot"])
-    c.log(f"{clock_label(c)} · Scheduled {f['callsign']} ({count}x {sq['type']}) against {f['target_name']}, "
-          f"on target {clock_label(c, f['tot'])}{' (night)' if f['night'] else ''}.", mission, sq["type"],
-          side="blue", t=w["clock"])
+    f["night"] = is_night(c, f[key])
+    c.log(f"{clock_label(c)} · Fragged {f['callsign']} ({count}x {sq['type']}, {mission}) "
+          f"{'holding' if mission == 'CAP' else 'against'} {f['target_name']}, "
+          f"{'on station' if key == 'station' else 'on target'} {clock_label(c, f[key])}"
+          f"{' (night)' if f['night'] else ''}.", mission, sq["type"], side="blue", t=w["clock"])
     return f
+
+
+def _station_name(c: Campaign, xy) -> str:
+    """'CAP station 12 nm W of Al Minhad AFB', from the nearest airfield."""
+    n = min(c.data["field_pos"], key=lambda k: _dist(c.data["field_pos"][k], xy))
+    fx, fy = c.data["field_pos"][n]
+    d = _dist((fx, fy), xy)
+    if d < 5000:
+        return f"station over {n}"
+    hdg = (math.degrees(math.atan2(xy[1] - fy, xy[0] - fx)) + 360) % 360   # x north, y east
+    points = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    return f"station {round(d / 1852)} nm {points[round(hdg / 45) % 8]} of {n}"
 
 
 def cancel(c: Campaign, flight_id: str) -> None:
