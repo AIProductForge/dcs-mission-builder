@@ -14,6 +14,8 @@ GET  /api/war?theatre=                  that map's war: clock, airfields, sites,
 POST /api/war/clock {theatre, rate, paused}  run, pause or change the clock's speed
 POST /api/war/fly {theatre, flight}          take a planned friendly flight: builds and saves its .miz
 POST /api/war/release {theatre}              give a taken flight back to the AI
+POST /api/war/schedule {theatre, squadron, target, count, tot}  put a strike on the ATO (tot null = ASAP)
+POST /api/war/cancel {theatre, flight}       scrub a friendly flight that hasn't taken off
 GET  /api/current                       the last mission built (for the briefing page)
 POST /api/ping                               keeps the server alive while the page is open
 
@@ -94,6 +96,8 @@ class State:
             if "war" not in c.data:
                 self.init_war(c)
                 c.save()
+            elif war.add_bombers(c, self.jet_fields(theatre)):  # wars started before the bombers
+                c.save()
         generator.SCENARIOS.clear()
         for theatre in self.campaigns:
             self.refresh_view(theatre)
@@ -134,11 +138,14 @@ class State:
             self._blue_types = jets[:6] + helis[:1]
         return self._blue_types
 
-    def init_war(self, c) -> None:
+    @staticmethod
+    def jet_fields(theatre: str) -> set[str]:
         from .inventory import TERRAINS
-        t = TERRAINS[c.theatre]()
-        jet_fields = {n for n, a in t.airports.items() if a.runways and any(p.airplanes for p in a.parking_slots)}
-        self.war.init(c, self.blue_types(), jet_fields)
+        t = TERRAINS[theatre]()
+        return {n for n, a in t.airports.items() if a.runways and any(p.airplanes for p in a.parking_slots)}
+
+    def init_war(self, c) -> None:
+        self.war.init(c, self.blue_types(), self.jet_fields(c.theatre))
 
     def refresh_view(self, theatre: str) -> None:
         """What the generator sees for this map: the campaign as it stands now."""
@@ -272,6 +279,20 @@ class State:
             return {"path": saved["path"], "values": asdict(spec), "briefing": briefing.to_dict(),
                     "war": war.snapshot(c)}
 
+    def schedule(self, theatre: str, squadron: str, target: str, count: int, tot) -> dict:
+        with self.lock:
+            c = self.campaigns[theatre]
+            f = self.war.schedule(c, squadron, target, count, tot)
+            c.save()
+            return {"flight": f["id"], "war": self.war.snapshot(c)}
+
+    def cancel(self, theatre: str, flight: str) -> dict:
+        with self.lock:
+            c = self.campaigns[theatre]
+            self.war.cancel(c, flight)
+            c.save()
+            return self.war.snapshot(c)
+
     def release(self, theatre: str) -> dict:
         with self.lock:
             c = self.campaigns[theatre]
@@ -368,6 +389,11 @@ def make_handler(state: State):
                     return self._json(200, state.set_clock(body["theatre"], body.get("rate"), body.get("paused")))
                 if self.path == "/api/war/fly":
                     return self._json(200, state.fly(body["theatre"], body["flight"]))
+                if self.path == "/api/war/schedule":
+                    return self._json(200, state.schedule(body["theatre"], body["squadron"], body["target"],
+                                                          body.get("count", 2), body.get("tot")))
+                if self.path == "/api/war/cancel":
+                    return self._json(200, state.cancel(body["theatre"], body["flight"]))
                 if self.path == "/api/war/release":
                     return self._json(200, state.release(body["theatre"]))
                 if self.path == "/api/campaign/reset":

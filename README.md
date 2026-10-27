@@ -74,6 +74,20 @@ spirit of Falcon BMS's dynamic campaign:
   lost on both sides, from `dcs.log`), the war resumes from takeoff. **Give back to AI** hands
   the flight back unflown.
 
+- **Plan a strike.** Schedule your own strikes: any friendly squadron against any enemy site,
+  on the front line or deep behind it, with the number of aircraft and either "as soon as
+  possible" or a time on target (e.g. Day 2 02:00 for a night strike: the route is timed back
+  from it). Click an enemy site on the map to pick it. **Scrub this flight** removes a friendly
+  flight that hasn't taken off.
+- **Bombers.** Blue also has an F-117A (8), B-1B (6) and B-52H (6) squadron at its rearmost
+  airfield with a runway. They are AI-only in DCS, and they fly only strikes you schedule. The
+  F-117 mostly slips past SAMs and fighters; B-1B and B-52 cells hit harder and can take out up
+  to two more sites within 2-3 km of the aimpoint, but they are easier to shoot down. To fly
+  with them, schedule your own flight with a matching time on target (an F-15E two minutes
+  behind a B-52 cell, say) and fly that: the bombers are in your mission as AI.
+- **Night.** A time on target between 21:00 and 05:00 counts as night: enemy fighters are less
+  effective, and the mission you fly starts at that hour.
+
 Left alone, the war moves slowly and not always your way; your sorties are what tip it.
 
 **Results from DCS.** Saved missions log each kill of a tracked unit to

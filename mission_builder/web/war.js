@@ -6,6 +6,8 @@
 const $ = (id) => document.getElementById(id);
 const S = { theatre: null, snap: null, at: 0, selected: null, map: null, layers: {}, markers: new Map(), busy: false };
 const COLORS = { blue: "#1f4e8c", red: "#b3261e", dead: "#8a8a80" };
+const ROLE = { sam: "SAM site", ewr: "Early-warning radar", shorad: "Short-range air defence", armor: "Armour",
+               missile: "Missile battery", structure: "Installation", farp: "Helicopter base" };
 
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {
@@ -92,8 +94,9 @@ function drawStatic() {
   for (const site of s.sites) {
     L.circleMarker(site.ll, { radius: 3, weight: site.alive ? 0 : 1.2, color: site.alive ? COLORS[site.side] : COLORS.dead,
                               fillColor: COLORS[site.side], fillOpacity: site.alive ? 0.8 : 0 })
-      .bindTooltip(`${site.side === "blue" ? "Friendly" : "Enemy"} ${site.role} · ${site.zone}${site.alive ? "" : " (destroyed)"}`,
-                   { className: "map-tip" })
+      .bindTooltip(`${site.side === "blue" ? "Friendly" : "Enemy"} ${ROLE[site.role] || site.role} · ${site.zone}` +
+                   `${site.alive ? "" : " (destroyed)"}`, { className: "map-tip" })
+      .on("click", () => pickTarget(site))
       .addTo(S.layers.sites);
   }
   for (const f of s.fields) {
@@ -175,6 +178,8 @@ function renderAto() {
                    `<td class="tk"></td><td><span class="st ${cls}">${st}</span></td>`;
     tr.querySelector(".n").textContent = `${f.callsign} · ${f.count}× ${f.type}`;
     tr.querySelector(".tk").textContent = flightTask(f);
+    if (f.scheduled || f.night) tr.querySelector(".tk").insertAdjacentHTML("beforeend",
+      `<span class="tag">${[f.scheduled ? "YOURS" : "", f.night ? "NIGHT" : ""].filter(Boolean).join(" · ")}</span>`);
     tr.addEventListener("click", () => select(f.id, true));
     tb.appendChild(tr);
   }
@@ -193,8 +198,10 @@ function renderSelected() {
   if (f.result) lines.push(`Result: ${f.result}.`);
   if (f.losses) lines.push(`Losses: ${f.losses}.`);
   $("sel-text").textContent = lines.join(" ");
-  const flyable = f.side === "blue" && f.status === "planned" && t < f.takeoff && S.snap.mode === "running";
-  $("btn-fly").hidden = !flyable;
+  const open = f.side === "blue" && f.status === "planned" && t < f.takeoff && S.snap.mode === "running";
+  $("btn-fly").hidden = !open || S.snap.ai_only.includes(f.type);
+  $("btn-scrub").hidden = !open;
+  if (open && S.snap.ai_only.includes(f.type)) $("sel-text").textContent += " AI only in DCS: fly an escort or SEAD flight alongside it.";
 }
 
 function renderZones() {
@@ -256,8 +263,91 @@ function renderClock() {
     "Fly it in DCS: the war stays paused and resumes from takeoff once the results are read from dcs.log.";
 }
 
+// ---------- planning strikes ----------
+function renderPlan() {
+  const s = S.snap;
+  const sqSel = $("p-squadron"), keepSq = sqSel.value;
+  sqSel.innerHTML = "";
+  for (const sq of s.squadrons) {
+    if (sq.side !== "blue" || !sq.total || !sq.missions.some((m) => m !== "CAP")) continue;
+    const o = document.createElement("option");
+    o.value = sq.id;
+    o.textContent = `${sq.type} · ${sq.base} · ${sq.available} ready${s.ai_only.includes(sq.type) ? " · AI" : ""}`;
+    sqSel.appendChild(o);
+  }
+  if ([...sqSel.options].some((o) => o.value === keepSq)) sqSel.value = keepSq;
+  const tSel = $("p-target"), keepT = tSel.value;
+  tSel.innerHTML = "";
+  const front = new Set(s.front.blue);
+  const zones = [...new Set(s.sites.filter((x) => x.side === "red" && x.alive).map((x) => x.zone))]
+    .sort((a, b) => (front.has(b) - front.has(a)) || a.localeCompare(b));
+  for (const z of zones) {
+    const g = document.createElement("optgroup");
+    g.label = `${z} · ${front.has(z) ? "front line" : "deep"}`;
+    for (const site of s.sites.filter((x) => x.side === "red" && x.alive && x.zone === z)
+                             .sort((a, b) => (ROLE[a.role] || a.role).localeCompare(ROLE[b.role] || b.role))) {
+      const o = document.createElement("option");
+      o.value = site.id;
+      o.textContent = `${ROLE[site.role] || site.role} (${site.id})`;
+      g.appendChild(o);
+    }
+    tSel.appendChild(g);
+  }
+  if ([...tSel.options].some((o) => o.value === keepT)) tSel.value = keepT;
+  const daySel = $("p-day"), keepDay = daySel.value;
+  const today = Number(label(clockNow()).split(" ")[1]);
+  daySel.innerHTML = "";
+  for (let d = today; d <= today + 2; d++) {
+    const o = document.createElement("option");
+    o.value = String(d);
+    o.textContent = `Day ${d}`;
+    daySel.appendChild(o);
+  }
+  if ([...daySel.options].some((o) => o.value === keepDay)) daySel.value = keepDay;
+  planNote();
+}
+
+function planNote() {
+  const sq = S.snap.squadrons.find((x) => x.id === $("p-squadron").value);
+  $("p-count").max = sq ? Math.max(1, sq.available) : 12;
+  const tot = planTot();
+  let note = sq && S.snap.ai_only.includes(sq.type) ? `${sq.type} is AI only in DCS; it flies this strike for you. ` : "";
+  if (tot !== null) {
+    const hour = Number($("p-time").value.split(":")[0]);
+    note += `On target ${label(tot)}${hour >= 21 || hour < 5 ? " (night)" : ""}.`;
+  }
+  $("p-note").textContent = note;
+}
+
+function planTot() {
+  if ($("p-when").value !== "tot") return null;
+  const [hh, mm] = ($("p-time").value || "02:00").split(":").map(Number);
+  const start = new Date(S.snap.start);
+  const startOfDay = start.getHours() * 3600 + start.getMinutes() * 60;
+  return (Number($("p-day").value) - 1) * 86400 + hh * 3600 + mm * 60 - startOfDay;
+}
+
+function pickTarget(site) {
+  if (site.side !== "red" || !site.alive) return;
+  if (!$("plan").open) { $("plan").open = true; renderPlan(); }
+  $("p-target").value = site.id;
+  setStatus(`Target: ${ROLE[site.role] || site.role} near ${site.zone}.`);
+}
+
+async function scheduleStrike() {
+  try {
+    const res = await api("/api/war/schedule", { theatre: S.theatre, squadron: $("p-squadron").value,
+      target: $("p-target").value, count: Number($("p-count").value), tot: planTot() });
+    S.selected = res.flight;
+    take(res.war, false);
+    const f = res.war.flights.find((x) => x.id === res.flight);
+    setStatus(`${f.callsign} is on the ATO: takeoff ${label(f.takeoff)}, on target ${label(f.tot)}.`, "ok");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
 function render(full) {
   renderClock();
+  if (!$("plan").open || full) renderPlan();
   renderAto();
   renderSelected();
   renderZones();
@@ -331,6 +421,14 @@ async function boot() {
   for (const b of document.querySelectorAll(".rate")) b.addEventListener("click", () => clockCmd({ rate: Number(b.dataset.rate) }));
   for (const id of ["show-blue", "show-red", "show-done"]) $(id).addEventListener("change", renderAto);
   $("btn-fly").addEventListener("click", fly);
+  $("btn-scrub").addEventListener("click", async () => {
+    try { take(await api("/api/war/cancel", { theatre: S.theatre, flight: S.selected }), false); setStatus("Flight scrubbed."); }
+    catch (e) { setStatus(e.message, "err"); }
+  });
+  $("btn-schedule").addEventListener("click", scheduleStrike);
+  $("p-when").addEventListener("change", () => { $("p-tot-row").hidden = $("p-when").value !== "tot"; planNote(); });
+  for (const id of ["p-squadron", "p-day", "p-time"]) $(id).addEventListener("change", planNote);
+  $("plan").addEventListener("toggle", () => { if ($("plan").open) renderPlan(); });
   $("btn-release").addEventListener("click", async () => {
     try { take(await api("/api/war/release", { theatre: S.theatre }), false); setStatus("Flight handed back to the AI."); }
     catch (e) { setStatus(e.message, "err"); }

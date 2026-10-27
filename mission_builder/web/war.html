@@ -47,7 +47,27 @@
     <h2 id="sel-title"></h2>
     <p class="campaign-line" id="sel-text"></p>
     <button class="btn primary" id="btn-fly" type="button">Fly this flight</button>
+    <button class="btn ghost danger" id="btn-scrub" type="button">Scrub this flight</button>
   </section>
+
+  <details class="plan" id="plan">
+    <summary>Plan a strike</summary>
+    <p class="campaign-line">Any friendly squadron, any enemy site: front line or deep behind it. Bombers fly only what you schedule here.
+      Click an enemy site on the map to pick it.</p>
+    <div class="field nopin"><label for="p-squadron">Squadron</label><select id="p-squadron"></select></div>
+    <div class="field nopin"><label for="p-target">Target</label><select id="p-target"></select></div>
+    <div class="plan-row">
+      <div class="field nopin"><label for="p-count">Aircraft</label><input id="p-count" type="number" min="1" max="12" value="2"></div>
+      <div class="field nopin"><label for="p-when">Timing</label>
+        <select id="p-when"><option value="asap">As soon as possible</option><option value="tot">Time on target…</option></select></div>
+    </div>
+    <div class="plan-row" id="p-tot-row" hidden>
+      <div class="field nopin"><label for="p-day">Day</label><select id="p-day"></select></div>
+      <div class="field nopin"><label for="p-time">On target (local)</label><input id="p-time" type="time" value="02:00"></div>
+    </div>
+    <p class="campaign-line" id="p-note"></p>
+    <button class="btn primary" id="btn-schedule" type="button">Add to ATO</button>
+  </details>
 
   <p id="status" class="status" role="status" aria-live="polite"></p>
 

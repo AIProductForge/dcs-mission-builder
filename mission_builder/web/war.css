@@ -64,3 +64,14 @@ i.plane.blue { border-bottom-color: #1f4e8c; } i.plane.red { border-bottom-color
   .warpanel { position: static; height: auto; }
   .warmap { height: 70vh; order: -1; }
 }
+
+.selected #btn-scrub { margin-top: 6px; }
+details.plan { border: 1px solid var(--panel-line); border-radius: 4px; padding: 8px 10px; margin: 10px 0; }
+details.plan[open] { background: #10120f; }
+details.plan summary { cursor: pointer; font-family: var(--cond); text-transform: uppercase; letter-spacing: .1em; font-size: 14px; color: var(--accent); }
+details.plan .campaign-line { margin-top: 6px; }
+details.plan .btn { width: 100%; }
+.plan-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.field input[type=number], .field input[type=time] { width: 100%; background: #10120f; color: var(--panel-text);
+  border: 1px solid var(--panel-line); border-radius: 3px; padding: 6px 7px; font: 13px var(--mono); }
+.tag { font-size: 10px; letter-spacing: .06em; color: var(--pin); margin-left: 4px; }
