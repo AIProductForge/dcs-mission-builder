@@ -4,8 +4,11 @@ GET  /                      the briefing page (web/index.html)
 GET  /api/options           owned aircraft, maps, choice lists, last session
 GET  /api/airports?terrain=&aircraft=&scenario=&side=   the player's side's airfields for that aircraft
 GET  /api/loadouts?aircraft=            stored loadouts for that aircraft
+GET  /api/campaign                      every map's campaign state (checks dcs.log for results first)
 POST /api/generate {values, locks, reroll}  -> {values, briefing}
-POST /api/save                               -> {path}
+POST /api/save                               -> {path}; registers the sortie with the map's campaign
+POST /api/campaign/check {force}             apply results now (force: even if the flight hasn't ended)
+POST /api/campaign/reset {theatre}           start that map's campaign again from its baseline
 POST /api/ping                               keeps the server alive while the page is open
 
 The server shuts itself down a minute after the last page stops pinging, so
@@ -35,6 +38,7 @@ DEFAULT_CONFIG = {
     "output_dir": str(SAVED_GAMES / "DCS" / "Missions" / "Generated"),
     "liberation_payloads": str(SAVED_GAMES / "dcs_liberation" / "resources" / "customized_payloads"),
     "liberation_campaigns": str(SAVED_GAMES / "dcs_liberation" / "resources" / "campaigns"),
+    "dcs_logs": str(SAVED_GAMES / "DCS" / "Logs"),
     "port": 8765,
     "last": {},
 }
@@ -47,7 +51,7 @@ def load_config() -> dict:
     config = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         config.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-    for key in ("dcs_dir", "output_dir", "liberation_payloads", "liberation_campaigns"):
+    for key in ("dcs_dir", "output_dir", "liberation_payloads", "liberation_campaigns", "dcs_logs"):
         config[key] = os.path.expandvars(config[key])
     return config
 
@@ -68,13 +72,51 @@ class State:
         self.owned = [a.type_id for a in owned]
         self.modules = {a.type_id: a.module_folder for a in owned}
         self.terrains = installed_terrains(dcs_dir)
-        from . import scenarios
+        from . import campaign, scenarios
+        from .inventory import TERRAINS
+        self.campaign_mod = campaign
+        # One campaign per map, started from that map's baseline scenario.
+        self.baselines, self.campaigns = {}, {}
+        for theatre, found in scenarios.load(Path(config["liberation_campaigns"]), self.terrains).items():
+            base = campaign.baseline(theatre, found)
+            self.baselines[theatre] = base
+            self.campaigns[theatre] = campaign.Campaign.load_or_new(theatre, base, TERRAINS[theatre]())
         generator.SCENARIOS.clear()
-        generator.SCENARIOS.update(scenarios.load(Path(config["liberation_campaigns"]), self.terrains))
-        self.lock = threading.Lock()
+        for theatre in self.campaigns:
+            self.refresh_view(theatre)
+        self.seen_logs: set[str] = set()
+        self.lock = threading.RLock()
         self.current = None          # (spec, mission, briefing) of the last generate
         self.last_ping = time.time()
         self.page_seen = False
+
+    def refresh_view(self, theatre: str) -> None:
+        """What the generator sees for this map: the campaign as it stands now."""
+        self.gen.SCENARIOS[theatre] = [self.campaigns[theatre].view(self.baselines[theatre])]
+
+    def check_results(self, force: bool = False) -> list[str]:
+        """Apply results of flown sorties found in dcs.log. Returns what changed, for the status line."""
+        changes = []
+        with self.lock:
+            logs = Path(self.config["dcs_logs"])
+            for theatre, c in self.campaigns.items():
+                for sid, (dead, source) in self.campaign_mod.scan(logs, c.data["sorties"], self.seen_logs,
+                                                                  force).items():
+                    sortie = next(s for s in c.data["sorties"] if s["id"] == sid)
+                    changes += c.apply(sortie, dead, source) or [f"{len(dead)} enemy units destroyed."]
+                    self.refresh_view(theatre)
+        return changes
+
+    def campaign_state(self) -> dict:
+        return {t: c.summary() for t, c in self.campaigns.items()}
+
+    def reset_campaign(self, theatre: str) -> None:
+        from .inventory import TERRAINS
+        with self.lock:
+            c = self.campaign_mod.Campaign.new(theatre, self.baselines[theatre], TERRAINS[theatre]())
+            c.save()
+            self.campaigns[theatre] = c
+            self.refresh_view(theatre)
 
     def options(self) -> dict:
         g = self.gen
@@ -83,10 +125,7 @@ class State:
             "terrains": self.terrains,
             "mission_types": g.MISSION_TYPES,
             "helicopter_missions": g.HELICOPTER_MISSIONS,
-            "scenarios": {t: g.scenario_names(t) for t in self.terrains},
-            "sides": g.SIDES,
-            "default_sides": {t: {n: g.default_side(t, n) for n in g.scenario_names(t) if g.default_side(t, n)}
-                              for t in self.terrains},
+            "campaigns": self.campaign_state(),
             "complexity_names": g.COMPLEXITY_NAMES,
             "starts": list(g.START_TYPES),
             "weather": list(g.WEATHER),
@@ -99,6 +138,9 @@ class State:
         g = self.gen
         with self.lock:
             spec = g.randomize(values, locks, self.owned, self.terrains, modules=self.modules)
+            c = self.campaigns.get(spec.terrain)
+            if c and not c.fields_of("red"):
+                raise RuntimeError(f"The {spec.terrain} campaign is won. Reset it to fight there again.")
             spec, mission, briefing = g.build_with_retries(spec, locks, self.owned, self.terrains)
             self.current = (spec, mission, briefing)
             self.config["last"] = {"values": asdict(spec), "locks": sorted(locks)}
@@ -114,7 +156,10 @@ class State:
             out_dir.mkdir(parents=True, exist_ok=True)
             path = out_dir / self.gen.default_filename(spec, briefing)
             mission.save(str(path))
-            return {"path": str(path)}
+            c = self.campaigns.get(spec.terrain)
+            if c and briefing.sortie and not any(x["id"] == briefing.sortie for x in c.data["sorties"]):
+                c.register_sortie(briefing.sortie, str(path), briefing.mission_type, spec.aircraft, briefing.tracked)
+            return {"path": str(path), "sortie": briefing.sortie}
 
 
 def make_handler(state: State):
@@ -143,6 +188,9 @@ def make_handler(state: State):
                     heli = state.gen.is_helicopter(q["aircraft"]) if q.get("aircraft") else True
                     return self._json(200, state.gen.airports(q["terrain"], heli, q.get("scenario", ""),
                                                               q.get("side", state.gen.SIDES[0])))
+                if url.path == "/api/campaign":
+                    state.check_results()
+                    return self._json(200, state.campaign_state())
                 if url.path == "/api/loadouts":
                     aircraft = parse_qs(url.query)["aircraft"][0]
                     g = state.gen
@@ -172,6 +220,12 @@ def make_handler(state: State):
                     return self._json(200, state.generate(body.get("values", {}), set(body.get("locks", []))))
                 if self.path == "/api/save":
                     return self._json(200, state.save())
+                if self.path == "/api/campaign/check":
+                    changes = state.check_results(bool(body.get("force")))
+                    return self._json(200, {"changes": changes, "campaigns": state.campaign_state()})
+                if self.path == "/api/campaign/reset":
+                    state.reset_campaign(body["theatre"])
+                    return self._json(200, {"campaigns": state.campaign_state()})
                 return self._json(404, {"error": "unknown endpoint"})
             except Exception as e:
                 logging.exception("POST %s failed", self.path)

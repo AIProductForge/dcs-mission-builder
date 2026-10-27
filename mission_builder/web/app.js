@@ -1,12 +1,12 @@
 "use strict";
 
-const FIELDS = ["aircraft", "terrain", "scenario", "side", "airport", "mission_type", "complexity", "loadout", "start", "flight_size",
+const FIELDS = ["aircraft", "terrain", "airport", "mission_type", "complexity", "loadout", "start", "flight_size",
                 "date", "hour", "weather", "enemy_skill", "awacs", "tanker"];
 const PIN_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.5 1.5 14.5 5.5 12.6 6.1 9.9 8.8 10.2 12 8.9 13.3 6.2 10.6 2.6 14.2 1.8 13.4 5.4 9.8 2.7 7.1 4 5.8 7.2 6.1 9.9 3.4z"/></svg>';
 
 const $ = (id) => document.getElementById(id);
 const el = (id) => $("f-" + id);
-const state = { options: null, locks: new Set(), seed: 0, map: null, layer: null, busy: false };
+const state = { options: null, campaigns: {}, locks: new Set(), seed: 0, map: null, layer: null, busy: false };
 
 // ---------- API ----------
 async function api(path, body) {
@@ -54,17 +54,79 @@ function getValues() {
 
 async function refreshAirports(keep) {
   const q = new URLSearchParams({ terrain: el("terrain").value, aircraft: el("aircraft").value,
-                                  scenario: el("scenario").value, side: el("side").value });
+                                  scenario: (state.campaigns[el("terrain").value] || {}).scenario || "" });
   const list = await api(`/api/airports?${q}`);
   fillSelect(el("airport"), list);
   if (keep && list.includes(keep)) el("airport").value = keep;
   return list.includes(keep);
 }
 
-function refreshScenarios(keep) {
-  const list = state.options.scenarios[el("terrain").value] || [];
-  fillSelect(el("scenario"), list);
-  if (keep && list.includes(keep)) el("scenario").value = keep;
+// ---------- campaign ----------
+function renderCampaign() {
+  const c = state.campaigns[el("terrain").value];
+  $("campaign").hidden = !c;
+  if (!c) return;
+  text("c-name", c.scenario);
+  $("c-fields").innerHTML = c.won
+    ? "<b>Campaign won.</b> Every enemy airfield is in friendly hands. Reset the map to fight again."
+    : `Friendly airfields <b>${c.blue_fields.length}</b> · enemy <b>${c.red_fields.length}</b> · ` +
+      `enemy sites left <b>${c.sites_alive}</b> of ${c.sites_total}`;
+  const zones = $("c-zones");
+  zones.innerHTML = "";
+  for (const z of c.zones) {
+    const li = document.createElement("li");
+    li.className = c.front.includes(z.field) ? "front" : "";
+    li.title = `${z.alive} of ${z.total} enemy sites around ${z.field} still standing. Destroy them all to capture it.`;
+    li.innerHTML = `<span class="name"></span><span class="count">${z.alive}/${z.total}</span>` +
+                   `<span class="bar"><span style="width:${z.total ? (100 * z.alive / z.total) : 0}%"></span></span>`;
+    li.querySelector(".name").textContent = z.field;
+    zones.appendChild(li);
+  }
+  const events = $("c-events");
+  events.innerHTML = "";
+  const recent = [...c.events].reverse().slice(0, 5);
+  if (!recent.length) events.innerHTML = "<li>No flights reported yet. Save a mission and fly it.</li>";
+  for (const e of recent) {
+    const li = document.createElement("li");
+    li.innerHTML = "<time></time><span></span>";
+    li.querySelector("time").textContent = `${e.when.replace("T", " ").slice(0, 16)} · ${e.mission}, ${e.aircraft}`;
+    li.querySelector("span").textContent = e.text;
+    events.appendChild(li);
+  }
+  $("c-pending").textContent = c.pending.length
+    ? `${c.pending.length} saved mission${c.pending.length > 1 ? "s" : ""} waiting to be flown. Results are read from dcs.log when the flight ends.`
+    : "";
+}
+
+function takeCampaigns(campaigns) {
+  // Tell the user when a flight's results have just been applied.
+  for (const [t, c] of Object.entries(campaigns)) {
+    const before = state.campaigns[t];
+    if (before && c.events.length && c.events.length !== before.events.length) {
+      setStatus(`${t}: ${c.events[c.events.length - 1].text}`, "ok");
+    }
+  }
+  state.campaigns = campaigns;
+  renderCampaign();
+}
+
+async function checkResults(force) {
+  try {
+    const res = await api("/api/campaign/check", { force });
+    if (!res.changes.length) setStatus(force ? "Nothing logged for the current flight yet." : "No finished flights found in dcs.log.");
+    takeCampaigns(res.campaigns);
+    if (res.changes.length) await refreshAirports(el("airport").value);
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function resetCampaign() {
+  const t = el("terrain").value;
+  if (!confirm(`Reset the ${t} campaign to its starting front? Destroyed sites and captured airfields are lost.`)) return;
+  try {
+    takeCampaigns((await api("/api/campaign/reset", { theatre: t })).campaigns);
+    await refreshAirports(el("airport").value);
+    setStatus(`${t} campaign reset.`, "ok");
+  } catch (e) { setStatus(e.message, "err"); }
 }
 
 // Helicopters fly Free flight, Strike and CAS only.
@@ -119,8 +181,7 @@ function loadoutLabel(name) { return name.replace(/^Liberation\s+/i, ""); }
 async function setValues(v) {
   el("aircraft").value = v.aircraft;
   el("terrain").value = v.terrain;
-  refreshScenarios(v.scenario);
-  el("side").value = v.side;
+  renderCampaign();
   await refreshAirports(v.airport);
   refreshMissionTypes(v.mission_type);
   el("complexity").value = String(v.complexity);
@@ -155,24 +216,16 @@ function setupPins() {
     btn.setAttribute("aria-label", `Pin ${f.replace("_", " ")}`);
     btn.addEventListener("click", () => {
       state.locks.has(f) ? state.locks.delete(f) : state.locks.add(f);
-      if (f === "airport" && state.locks.has("airport")) ["terrain", "scenario", "side"].forEach((x) => state.locks.add(x));
-      if (f === "scenario" && state.locks.has("scenario")) state.locks.add("terrain");
+      if (f === "airport" && state.locks.has("airport")) state.locks.add("terrain");
       renderPins();
     });
     node.appendChild(btn);
     el(f).addEventListener("change", async () => {
       state.locks.add(f);
-      if (f === "airport") ["terrain", "scenario", "side"].forEach((x) => state.locks.add(x));
-      if (f === "scenario") state.locks.add("terrain");
-      if (f === "terrain") { refreshScenarios(); state.locks.delete("scenario"); }
-      if ((f === "terrain" || f === "scenario") && !state.locks.has("side")) {
-        // Some scenarios have a natural home side (e.g. UAE rather than Iran in the Gulf).
-        const preferred = (state.options.default_sides[el("terrain").value] || {})[el("scenario").value];
-        if (preferred) el("side").value = preferred;
-      }
-      if (f === "aircraft" && !refreshMissionTypes(el("mission_type").value)) state.locks.delete("mission_type");
-      if (["terrain", "scenario", "side", "aircraft"].includes(f)) {
-        // Home field must be on the player's side of the scenario: drop the pin if it no longer is.
+      if (f === "airport") state.locks.add("terrain");
+      if (f === "terrain") renderCampaign();
+      if (["terrain", "aircraft"].includes(f)) {
+        // Home field must be one the player holds: drop the pin if it no longer is.
         if (!(await refreshAirports(el("airport").value))) state.locks.delete("airport");
       }
       if (f === "aircraft" || f === "mission_type") {
@@ -213,7 +266,8 @@ async function save() {
   try {
     const res = await api("/api/save", {});
     $("b-file").textContent = res.path.toUpperCase();
-    setStatus(`Saved ${res.path}`, "ok");
+    setStatus(`Saved ${res.path}` + (res.sortie ? ". Fly it and the campaign updates when the flight ends." : ""), "ok");
+    takeCampaigns(await api("/api/campaign"));
   } catch (e) {
     setStatus(e.message, "err");
   }
@@ -441,6 +495,13 @@ function renderMap(b) {
     bounds.push(ll(t));
   }
 
+  // airfields and who holds them
+  for (const f of b.front || []) {
+    L.marker(ll(f), { keyboard: false, icon: L.divIcon({ className: "", iconSize: [12, 12], iconAnchor: [6, 6],
+      html: `<div class="field-marker ${f.side}"></div>` }) }).addTo(g)
+      .bindTooltip(`${f.name}: ${f.side === "blue" ? "friendly" : "enemy"}`, { className: "map-tip" });
+  }
+
   // route
   const route = b.waypoints.map(ll);
   L.polyline(route, { color: C.route, weight: 2.5 }).addTo(g);
@@ -482,7 +543,7 @@ async function boot() {
   fillSelect(el("aircraft"), o.aircraft, aircraftLabel, (a) => a.id);
   fillSelect(el("terrain"), o.terrains);
   fillSelect(el("mission_type"), o.mission_types);
-  fillSelect(el("side"), o.sides);
+  state.campaigns = o.campaigns || {};
   el("complexity").addEventListener("input", showComplexity);
   fillSelect(el("start"), o.starts);
   fillSelect(el("weather"), o.weather);
@@ -495,7 +556,7 @@ async function boot() {
     await setValues(last.values);
     state.locks = new Set((last.locks || []).filter((f) => FIELDS.includes(f)));
   } else {
-    refreshScenarios();
+    renderCampaign();
     await refreshAirports();
     refreshMissionTypes();
     el("complexity").value = "3";
@@ -507,10 +568,15 @@ async function boot() {
   $("btn-generate").addEventListener("click", () => generate(false));
   $("btn-apply").addEventListener("click", () => generate(true));
   $("btn-save").addEventListener("click", save);
+  $("btn-check").addEventListener("click", () => checkResults(false));
+  $("btn-force").addEventListener("click", () => checkResults(true));
+  $("btn-reset").addEventListener("click", resetCampaign);
   $("btn-unlock").addEventListener("click", () => { state.locks.clear(); renderPins(); setStatus("All fields unpinned."); });
 
   setInterval(() => api("/api/ping", {}).catch(() => setStatus("Mission Builder has stopped. Relaunch it to continue.", "err")), 15000);
   api("/api/ping", {}).catch(() => {});
+  // Pick up flights as they finish (the server reads dcs.log on each call).
+  setInterval(() => api("/api/campaign").then(takeCampaigns).catch(() => {}), 20000);
   await generate(false);
 }
 

@@ -50,6 +50,9 @@ class Scenario:
     red_sites: dict[str, list[list[float]]] = field(default_factory=dict)
     blue_ships: list[list[float]] = field(default_factory=list)
     red_ships: list[list[float]] = field(default_factory=list)
+    # Set only on a campaign's current view: "x,y" -> site id, and the ids on the front line.
+    red_site_ids: dict[str, str] = field(default_factory=dict)
+    front_sites: list[str] = field(default_factory=list)
 
 
 def _role(type_name: str) -> str | None:

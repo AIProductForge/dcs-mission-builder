@@ -29,10 +29,11 @@ from dcs.mapping import Point
 from dcs.mission import Mission, StartType
 from dcs.statics import Fortification
 from dcs.terrain.terrain import NoParkingSlotError
-from dcs.triggers import TriggerOnce
+from dcs.triggers import TriggerOnce, TriggerStart
 from dcs.unit import Skill
 
 from .inventory import TERRAINS
+from . import campaign
 from .scenarios import Scenario
 
 START_TYPES = {
@@ -48,15 +49,6 @@ SKILLS = {"Average": Skill.Average, "Good": Skill.Good, "High": Skill.High, "Exc
 SIDES = ["Blue (as scenario)", "Red (sides swapped)"]
 NO_SCENARIO = "None (any airfield)"
 COMPLEXITY_NAMES = {1: "Low", 2: "Moderate", 3: "Medium", 4: "High", 5: "Very high"}
-
-# Airfields the player expects to fly from on maps where Liberation's colours don't say so.
-# Some Persian Gulf campaigns make Iran blue; when exactly one side holds UAE/Oman fields,
-# that side is the default (Play as can still be swapped or pinned).
-PREFERRED_HOME = {
-    "PersianGulf": {"Abu Dhabi Intl", "Al Ain Intl", "Al Dhafra AFB", "Al Maktoum Intl", "Al Minhad AFB",
-                    "Al-Bateen", "Dubai Intl", "Fujairah Intl", "Khasab", "Liwa AFB", "Ras Al Khaimah Intl",
-                    "Sas Al Nakheel", "Sharjah Intl", "Sir Abu Nuayr"},
-}
 
 # Receivers that refuel from a drogue (probe) rather than a boom.
 PROBE_AIRCRAFT = {"FA-18C_hornet", "F-14A-95-GR", "F-14A-135-GR-Early", "F-14A-135-GR", "F-14B",
@@ -113,7 +105,7 @@ def is_helicopter(type_id: str) -> bool:
 
 
 def scenario_names(terrain_name: str) -> list[str]:
-    return [s.name for s in SCENARIOS.get(terrain_name, [])] + [NO_SCENARIO]
+    return [s.name for s in SCENARIOS.get(terrain_name, [])] or [NO_SCENARIO]
 
 
 def find_scenario(terrain_name: str, name: str) -> Scenario | None:
@@ -127,17 +119,6 @@ def _sides(sc: Scenario | None, side: str):
     if side == SIDES[1]:
         return sc.red_fields, sc.blue_fields, sc.red_sites, sc.blue_sites, sc.blue_ships
     return sc.blue_fields, sc.red_fields, sc.blue_sites, sc.red_sites, sc.red_ships
-
-
-def default_side(terrain_name: str, scenario: str) -> str | None:
-    """The side the player should fly by default, or None to roll it as usual."""
-    sc, pref = find_scenario(terrain_name, scenario), PREFERRED_HOME.get(terrain_name)
-    if not (sc and pref):
-        return None
-    blue, red = bool(pref & set(sc.blue_fields)), bool(pref & set(sc.red_fields))
-    if blue == red:  # neither side (e.g. a war inside Iran) or both
-        return None
-    return SIDES[0] if blue else SIDES[1]
 
 
 def airports(terrain_name: str, helicopter: bool = True, scenario: str = "", side: str = SIDES[0]) -> list[str]:
@@ -191,13 +172,8 @@ def randomize(values: dict, locks: set[str], owned: list[str], terrains: list[st
     roll("terrain", terrains)
     names = scenario_names(v["terrain"])
     if "scenario" not in locks or v.get("scenario") not in names:
-        real = names[:-1]
-        v["scenario"] = rng.choice(real) if real else NO_SCENARIO
-    preferred = default_side(v["terrain"], v["scenario"])
-    if preferred and ("side" not in locks or v.get("side") not in SIDES):
-        v["side"] = preferred
-    else:
-        roll("side", [SIDES[0], SIDES[0], SIDES[0], SIDES[1]])
+        v["scenario"] = rng.choice(names)
+    v["side"] = SIDES[0]  # campaigns are flown as blue
 
     if "aircraft" not in locks:
         candidates = owned
@@ -401,6 +377,9 @@ class Briefing:
     execution: list = field(default_factory=list)
     triggers: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    sortie: str = ""                                     # campaign sortie id, reported back in dcs.log
+    tracked: dict = field(default_factory=dict)          # enemy site id -> units placed on it
+    front: list = field(default_factory=list)            # airfields with their owner, for the map
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -459,6 +438,7 @@ class _Builder:
         self.used_sites: set[tuple] = set()
         self.target_groups: list = []
         self.n = 0  # unique-name counter
+        self.tracked_units: list[str] = []  # units on campaign sites, named "MB:<site>:..."
 
     def name(self, base: str) -> str:
         self.n += 1
@@ -479,10 +459,19 @@ class _Builder:
                     pts.append(Point(x, y, self.terrain))
         return pts
 
-    def pick_site(self, roles, near_km, far_km) -> Point | None:
-        """An enemy land position of one of these roles, in range of home, preferring close ones."""
+    def site_id(self, p: Point | None) -> str | None:
+        """The campaign site at exactly this position, if any."""
+        if p is None or not self.sc:
+            return None
+        return self.sc.red_site_ids.get(f"{round(p.x)},{round(p.y)}")
+
+    def pick_site(self, roles, near_km, far_km, front: bool = False) -> Point | None:
+        """An enemy land position of one of these roles, in range of home, preferring close ones.
+        With `front`, positions in the campaign's front-line zones come first."""
         pts = [p for p in self.sites(*roles)
                if near_km * 1000 <= self.home.position.distance_to_point(p) <= far_km * 1000]
+        if front and self.sc and self.sc.front_sites:
+            pts = [p for p in pts if self.site_id(p) in self.sc.front_sites] or pts
         if not pts:
             return None
         pts.sort(key=lambda p: self.home.position.distance_to_point(p))
@@ -497,19 +486,27 @@ class _Builder:
 
     # units ---------------------------------------------------------------------------------
 
-    def ground(self, label: str, types, pos: Point, country=None, late=False, spread=60):
+    def track(self, unit, site: str | None) -> None:
+        """Name a unit placed on a campaign site so its death can be reported back."""
+        if site:
+            unit.name = f"MB:{site}:{self.n}:{len(self.tracked_units) + 1}"
+            self.tracked_units.append(unit.name)
+            self.b.tracked[site] = self.b.tracked.get(site, 0) + 1
+
+    def ground(self, label: str, types, pos: Point, country=None, late=False, spread=60, site=None):
         country = country or self.red
         g = self.m.vehicle_group_platoon(country, self.name(label), types, pos, heading=self.rng.uniform(0, 360))
         for i, u in enumerate(g.units):  # spread units out so a site isn't one stacked pile
             u.position = pos.point_from_heading(self.rng.uniform(0, 360), spread * (i > 0) * (1 + i * 0.5))
             if country is self.red:
                 u.skill = self.skill
+                self.track(u, site)
         g.late_activation = late
         return g
 
-    def sam(self, kind: str, pos: Point, late=False, threat_note=None):
+    def sam(self, kind: str, pos: Point, late=False, threat_note=None, site=None):
         types, rng_m = (SAM_SITES.get(kind) or SHORAD[kind])
-        g = self.ground(kind, types, pos, late=late, spread=120 if kind in SAM_SITES else 40)
+        g = self.ground(kind, types, pos, late=late, spread=120 if kind in SAM_SITES else 40, site=site)
         self.b.threats.append({"name": THREAT_NAMES.get(kind, kind), "kind": "SAM" if kind in SAM_SITES else "AAA",
                                **_ll(pos), "range_nm": round(rng_m * M_TO_NM, 1),
                                "note": threat_note or ("Ring is approximate." if kind in SAM_SITES
@@ -577,10 +574,10 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
     roles = {"Strike": ("structure", "missile", "armor", "sam"), "CAS": ("armor", "shorad", "structure"),
              "SEAD": ("sam", "ewr", "shorad"), "CAP": ("ewr", "sam", "shorad", "armor"),
              "Intercept": (), "Free flight": ("armor", "shorad", "structure", "sam")}[mt]
-    objective = B.pick_site(roles, near_km, far_km) if roles else None
+    objective = B.pick_site(roles, near_km, far_km, front=True) if roles else None
     if objective is None and roles and heli:
         # Nothing of the right kind in helicopter range: take the nearest enemy position of any kind.
-        objective = B.pick_site(roles + ("armor", "shorad", "structure", "sam", "ewr", "missile"), 3, 150)
+        objective = B.pick_site(roles + ("armor", "shorad", "structure", "sam", "ewr", "missile"), 3, 150, front=True)
     if objective is None and mt != "Intercept":
         objective = B.fallback_point(enemy_field)
     if mt == "Intercept":
@@ -611,11 +608,11 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
     callsign = f"{callsign[:-2].upper()} {callsign[-2]}" if callsign[-2:].isdigit() else (callsign or "PLAYER")
     obj_brg, obj_nm = round(heading_out) % 360, round(distance * M_TO_NM)
 
-    side_name = "Red" if spec.side == SIDES[1] else "Blue"
+    obj_site = B.site_id(objective)
     B.b = b = Briefing(
         codename=f"{rng.choice(CODENAME_A)} {rng.choice(CODENAME_B)}",
         dtg=_dtg(m.start_time, getattr(B.terrain, "utc_offset", None)),
-        theatre=spec.terrain, scenario=(B.sc.name + (" (sides swapped)" if spec.side == SIDES[1] else "")) if B.sc else "None",
+        theatre=spec.terrain, scenario=B.sc.name if B.sc else "None",
         aircraft=spec.aircraft, flight_size=spec.flight_size, callsign=callsign, mission_type=mt,
         complexity=f"{level} ({COMPLEXITY_NAMES[level]})", mission_statement="", loadout=loadout, stores=stores,
         home={"name": home.name, **_ll(home.position),
@@ -644,6 +641,7 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
         for i in range(n):
             pos = objective.point_from_heading(rng.uniform(0, 360), rng.uniform(80, 400))
             g = m.static_group(B.red, B.name("Target"), rng.choice(STRUCTURES), pos, heading=rng.uniform(0, 360))
+            B.track(g.units[0], obj_site)
             structures.append(g)
         B.target_groups += structures
         b.targets.append({"name": f"Military installation ({n} structures)", **_ll(objective),
@@ -652,7 +650,8 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
             second = B.pick_site(("structure", "missile", "armor"), near_km, far_km)
             if second:
                 g2 = B.ground("Missile battery", [vehicles.MissilesSS.Scud_B, vehicles.MissilesSS.Scud_B,
-                                                  vehicles.Unarmed.Ural_375], second)
+                                                  vehicles.Unarmed.Ural_375], second,
+                               site=B.site_id(second))
                 B.target_groups.append(g2)
                 b.targets.append({"name": "Missile battery (secondary)", **_ll(second), "units": [u.type for u in g2.units]})
         b.mission_statement = f"{flight} destroys the military installation at the objective, {where}, and recovers to {home.name}."
@@ -661,7 +660,8 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
         sizes = {1: 3, 2: 4, 3: 5, 4: 6, 5: 8}[level]
         enemy = [vehicles.Armor.T_72B, vehicles.Armor.BMP_2, vehicles.Armor.BTR_80, vehicles.Armor.T_72B3,
                  vehicles.Armor.BMP_3, vehicles.Armor.T_90]
-        red_armour = B.ground("Enemy armour", [rng.choice(enemy) for _ in range(sizes)], objective, spread=90)
+        red_armour = B.ground("Enemy armour", [rng.choice(enemy) for _ in range(sizes)], objective, spread=90,
+                              site=obj_site)
         hdg_home = objective.heading_between_point(home.position)
         friendly_pos = objective.point_from_heading(hdg_home, 3000)
         own = [Point(x, y, B.terrain) for x, y in B.friendly_sites.get("armor", [])]
@@ -683,7 +683,8 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
     elif mt == "SEAD":
         site = SEAD_TARGET[level]
         groups = [B.sam(k, objective.point_from_heading(rng.uniform(0, 360), 600 if i else 0),
-                        threat_note="PRIMARY TARGET. Ring is approximate.") for i, k in enumerate(site)]
+                        threat_note="PRIMARY TARGET. Ring is approximate.", site=obj_site)
+                  for i, k in enumerate(site)]
         B.target_groups += groups
         b.targets.append({"name": f"{' + '.join(THREAT_NAMES[k] for k in site)} site", **_ll(objective),
                           "units": [u.type for g in groups for u in g.units]})
@@ -773,11 +774,11 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
         for kind in AREA_SAMS[lvl]:
             pos = B.pick_site(("sam", "shorad"), max(5, near_km / 2), distance * M_TO_NM * 1.852 + 30)
             if pos is not None:
-                B.sam(kind, pos)
+                B.sam(kind, pos, site=B.site_id(pos))
         if level >= 4 and not heli:
             pos = B.pick_site(("ewr",), 0, far_km + 50)
             if pos is not None:
-                B.ground("EWR", [AD.X_1L13_EWR], pos)
+                B.ground("EWR", [AD.X_1L13_EWR], pos, site=B.site_id(pos))
                 b.threats.append({"name": "EWR (1L13)", "kind": "EWR", **_ll(pos), "range_nm": None,
                                   "note": "Early-warning radar: the enemy will see you coming."})
         if level >= 3 and mt in ("Strike", "CAS", "SEAD"):
@@ -853,10 +854,30 @@ def build(spec: MissionSpec) -> tuple[Mission, "Briefing"]:
                  "cloud_base_ft": round(2500 * M_TO_FT, -2) if wx is not None else None,
                  "visibility": "10+ km", "temp_c": round(m.weather.season_temperature)}
 
+    if B.sc:
+        for n in B.sc.blue_fields:
+            if n in B.terrain.airports:
+                B.terrain.airports[n].set_blue()
+        for n in B.sc.red_fields:
+            if n in B.terrain.airports:
+                B.terrain.airports[n].set_red()
+        b.front = [{"name": n, "side": side, **_ll(B.terrain.airports[n].position)}
+                   for side, names in (("blue", B.sc.blue_fields), ("red", B.sc.red_fields))
+                   for n in names if n in B.terrain.airports]
+    if B.tracked_units:
+        b.sortie = campaign.new_sortie_id()
+        t = TriggerStart(comment="Campaign results")
+        t.add_action(action.DoScript(m.string(campaign.results_script(b.sortie, B.tracked_units))))
+        m.triggerrules.triggers.append(t)
+        b.notes.append("Campaign mission: enemy losses at the objective and nearby sites are logged and "
+                       "applied to the campaign after the flight.")
+
     m.coalition["blue"].bullseye = {"x": home.position.x, "y": home.position.y}
     b.bullseye = {"name": "BULLSEYE", **_ll(home.position)}
     b.waypoints = _route(player)
-    b.situation.append(f"Friendly forces ({side_name} side of {B.sc.name if B.sc else 'the map'}) hold {home.name}. " +
+    held = (f"Friendly forces hold {len(B.sc.blue_fields)} airfields, the enemy {len(B.sc.red_fields)}. "
+            f"Operations from {home.name}. ") if B.sc else f"Friendly forces hold {home.name}. "
+    b.situation.append(held +
                        ("AWACS OVERLORD provides picture calls. " if spec.awacs else "No AWACS support. ") +
                        ("Tanker available." if any("Tanker" in s["role"] for s in b.support) else ""))
     if spec.aircraft == "F-15ESE" and int(spec.date[:4]) < 1998:

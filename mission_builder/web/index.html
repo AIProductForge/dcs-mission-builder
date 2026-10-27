@@ -20,8 +20,6 @@
   <form id="form" autocomplete="off" onsubmit="return false">
     <div class="field" data-field="aircraft"><label for="f-aircraft">Aircraft</label><select id="f-aircraft"></select></div>
     <div class="field" data-field="terrain"><label for="f-terrain">Theatre</label><select id="f-terrain"></select></div>
-    <div class="field" data-field="scenario"><label for="f-scenario">Scenario</label><select id="f-scenario"></select></div>
-    <div class="field" data-field="side"><label for="f-side">Play as</label><select id="f-side"></select></div>
     <div class="field" data-field="airport"><label for="f-airport">Home field</label><select id="f-airport"></select></div>
     <div class="field" data-field="mission_type"><label for="f-mission_type">Mission</label><select id="f-mission_type"></select></div>
     <div class="field range" data-field="complexity"><label for="f-complexity">Complexity <output id="complexity-out" for="f-complexity"></output></label>
@@ -46,6 +44,22 @@
     <button id="btn-save" class="btn save" type="button" disabled>Save .miz</button>
   </div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
+
+  <section class="campaign" id="campaign" aria-label="Campaign">
+    <div class="campaign-kicker">CAMPAIGN</div>
+    <h2 id="c-name">—</h2>
+    <p class="campaign-line" id="c-fields"></p>
+    <div class="campaign-sub">Front</div>
+    <ul class="zones" id="c-zones"></ul>
+    <div class="campaign-sub">Log</div>
+    <ul class="events" id="c-events"></ul>
+    <p class="campaign-line" id="c-pending"></p>
+    <div class="campaign-actions">
+      <button id="btn-check" class="btn" type="button" title="Read dcs.log for flights that have finished">Check results</button>
+      <button id="btn-force" class="btn ghost" type="button" title="Apply the flight in progress, from what dcs.log shows so far">Apply now</button>
+      <button id="btn-reset" class="btn ghost danger" type="button">Reset map</button>
+    </div>
+  </section>
 </aside>
 
 <main class="desk">
@@ -62,7 +76,7 @@
           <tr><th>MSN NO</th><td id="b-msn">—</td><th>DTG</th><td id="b-dtg">—</td></tr>
           <tr><th>THEATRE</th><td id="b-theatre">—</td><th>FLIGHT</th><td id="b-flight">—</td></tr>
           <tr><th>AIRCRAFT</th><td id="b-aircraft">—</td><th>TASK</th><td id="b-task">—</td></tr>
-          <tr><th>SCENARIO</th><td id="b-scenario">—</td><th>COMPLEXITY</th><td id="b-complexity">—</td></tr>
+          <tr><th>CAMPAIGN</th><td id="b-scenario">—</td><th>COMPLEXITY</th><td id="b-complexity">—</td></tr>
         </table>
       </header>
 
@@ -99,6 +113,8 @@
               <span class="lg air"></span>Enemy air
               <span class="lg support"></span>Support track
               <span class="lg friendly"></span>Friendly flight
+              <span class="lg airfield blue"></span>Friendly airfield
+              <span class="lg airfield red"></span>Enemy airfield
             </span></figcaption>
         </figure>
       </section>

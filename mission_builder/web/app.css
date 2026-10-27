@@ -83,6 +83,25 @@ body {
 .status.err { color: #f08a80; }
 .status.ok { color: #9fd39a; }
 
+/* ---- campaign panel ---- */
+.campaign { border-top: 1px solid var(--panel-line); margin-top: 14px; padding-top: 12px; }
+.campaign-kicker { font-family: var(--cond); letter-spacing: .18em; font-size: 12px; color: var(--accent); }
+.campaign h2 { font-family: var(--cond); font-weight: 700; font-size: 19px; margin: 2px 0 4px; text-transform: uppercase; letter-spacing: .03em; line-height: 1.15; }
+.campaign-line { font-size: 11.5px; line-height: 1.45; color: var(--panel-muted); margin: 0 0 8px; }
+.campaign-line b { color: var(--panel-text); font-weight: 600; }
+.campaign-sub { font-family: var(--cond); text-transform: uppercase; letter-spacing: .1em; font-size: 12.5px; color: var(--panel-muted); margin: 10px 0 4px; }
+.zones, .campaign .events { list-style: none; margin: 0; padding: 0; font-size: 11.5px; }
+.zones li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-bottom: 6px; }
+.zones .bar { grid-column: 1 / -1; height: 4px; background: #10120f; border-radius: 2px; overflow: hidden; }
+.zones .bar span { display: block; height: 100%; background: var(--threat); }
+.zones li.front .name::before { content: "▶ "; color: var(--accent); }
+.zones .count { color: var(--panel-muted); }
+.campaign .events li { color: var(--panel-muted); line-height: 1.4; margin-bottom: 6px; }
+.campaign .events time { color: var(--panel-text); display: block; }
+.campaign-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.campaign-actions .btn { font-size: 13px; padding: 6px 8px; }
+.btn.danger:hover:not(:disabled) { border-color: var(--threat); color: #f08a80; }
+
 /* ---- document ---- */
 .desk { padding: 28px 32px 48px; overflow-x: hidden; }
 .doc {
@@ -136,6 +155,9 @@ table.kv th { width: 30%; background: var(--paper-2); }
 .lg.air { border-top: 2px dashed var(--threat); }
 .lg.support { border-top: 2px dashed var(--support); }
 .lg.friendly { border-top: 2px dotted var(--support); }
+.lg.airfield { width: 9px; height: 9px; border: 0; }
+.lg.airfield.blue { background: var(--support); }
+.lg.airfield.red { background: var(--threat); }
 .map-offline { display: grid; place-items: center; height: 100%; color: var(--ink-muted); font-size: 12px; text-align: center; padding: 20px; }
 
 .doc-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--rule); font-size: 11px; color: var(--ink-muted); word-break: break-all; }
@@ -168,3 +190,7 @@ table.kv th { width: 30%; background: var(--paper-2); }
   .map { filter: none; }
   section { break-inside: avoid; }
 }
+
+.field-marker { width: 12px; height: 12px; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
+.field-marker.blue { background: var(--support); }
+.field-marker.red { background: var(--threat); }
