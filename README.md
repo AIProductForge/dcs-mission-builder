@@ -117,8 +117,7 @@ spirit of Falcon BMS's dynamic campaign:
 - **Airbase air defence.** Each friendly airfield has 3 SAM sites and an early-warning radar on top
   of its zone (Hawk batteries in DCS), so red's two strikes an hour meet real defences.
 - **Bombers.** Blue also has an F-117A (8), B-1B (6) and B-52H (6) squadron at its rearmost
-  airfield with a runway. They are AI-only in DCS, and the planner uses them against heavily defended targets as well as the missions you frag. The
-  The planner also uses them against heavily defended targets (see below). The
+  airfield with a runway. They are AI-only in DCS, and the planner uses them against heavily defended targets as well as the missions you frag (see below). The
   F-117 mostly slips past SAMs and fighters; B-1B and B-52 cells hit harder and can take out up
   to two more sites within 2-3 km of the aimpoint, but they are easier to shoot down. To fly
   with them, frag your own flight with a matching time on target (an F-15E two minutes
