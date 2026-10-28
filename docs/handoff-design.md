@@ -85,5 +85,5 @@ their positions, aircraft counts, loadouts. New:
 
 ## Not in this step
 
-DCS-based ranges per system (next step), AWACS (after that), integrated air defence scripts,
+AWACS (next step; DCS ranges per system were built 2026-10-27), integrated air defence scripts,
 calibrating the engine against DCS outcomes.

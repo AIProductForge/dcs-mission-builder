@@ -33,7 +33,7 @@ from dcs.triggers import TriggerOnce, TriggerStart
 from dcs.unit import Skill
 
 from .inventory import TERRAINS
-from . import campaign
+from . import campaign, systems
 from .scenarios import Scenario
 
 START_TYPES = {
@@ -93,6 +93,7 @@ class MissionSpec:
     target_xy: list = field(default_factory=list)   # [x, y] objective, e.g. a CAP station
     spawn_xy: list = field(default_factory=list)    # joining a flight in the air: where it is now
     rtb: bool = False              # ...and its target is already behind it
+    site_systems: dict = field(default_factory=dict)  # campaign site id -> [system, strength]
 
     @classmethod
     def from_dict(cls, d: dict) -> "MissionSpec":
@@ -468,6 +469,7 @@ class _Builder:
 
     def __init__(self, spec: MissionSpec):
         self.spec = spec
+        self.own_placed: set[str] = set()
         self.rng = random.Random(spec.seed)
         self.terrain = TERRAINS[spec.terrain]()
         self.m = Mission(self.terrain)
@@ -555,6 +557,18 @@ class _Builder:
         return g
 
     def sam(self, kind: str, pos: Point, late=False, threat_note=None, site=None):
+        own = self.spec.site_systems.get(site) if site else None
+        if own and own[0] in systems.SYSTEMS and site not in self.own_placed:
+            self.own_placed.add(site)   # once: a second SAM the mission adds there stays its own
+            # A campaign site is placed as the system the campaign has there, so DCS and the war agree.
+            system, strength = own
+            types, rng_m = systems.units_for(system, strength), systems.ranges(system, strength)[0]
+            is_sam = systems.ROLE[system] == "sam"
+            g = self.ground(system, types, pos, late=late, spread=120 if is_sam else 40, site=site)
+            self.b.threats.append({"name": system, "kind": "SAM" if is_sam else "AAA", **_ll(pos),
+                                   "range_nm": round(rng_m * M_TO_NM, 1),
+                                   "note": threat_note or f"Campaign site ({system}): DCS range."})
+            return g
         types, rng_m = (SAM_SITES.get(kind) or SHORAD[kind])
         g = self.ground(kind, types, pos, late=late, spread=120 if kind in SAM_SITES else 40, site=site)
         self.b.threats.append({"name": THREAT_NAMES.get(kind, kind), "kind": "SAM" if kind in SAM_SITES else "AAA",
@@ -714,17 +728,6 @@ def _follow_terrain(group) -> None:
             pt.alt_type = "RADIO"
 
 
-_A = vehicles.Armor
-GROUND_UNITS = {
-    "red": {"sam": SAM_SITES["SA-6"][0], "ewr": [AD.X_1L13_EWR], "shorad": [AD.ZSU_23_4_Shilka, AD.Strela_10M3],
-            "armor": [_A.T_72B, _A.BMP_2, _A.BTR_80], "missile": [vehicles.MissilesSS.Scud_B, vehicles.MissilesSS.Scud_B,
-                                                               vehicles.Unarmed.Ural_375]},
-    "blue": {"sam": [AD.Hawk_sr, AD.Hawk_tr, AD.Hawk_ln, AD.Hawk_ln], "ewr": [AD.Hawk_cwar],
-             "shorad": [AD.Vulcan, AD.M1097_Avenger], "armor": [_A.M_1_Abrams, _A.M_2_Bradley, _A.M_2_Bradley],
-             "missile": [vehicles.Artillery.MLRS, vehicles.Artillery.MLRS, vehicles.Unarmed.M_818]},
-}
-GROUND_THREATS = {"sam": ("SA-6 GAINFUL", 25_000), "shorad": ("SHORAD", 5_000)}
-
 
 def add_ground(B: "_Builder", sites: list[dict]) -> None:
     """The campaign map's ground forces around the player's route (see war.ground_sites), both
@@ -747,18 +750,18 @@ def add_ground(B: "_Builder", sites: list[dict]) -> None:
                                      pos.point_from_heading(B.rng.uniform(0, 360), 60 * i), heading=B.rng.uniform(0, 360))
                 B.track(g.units[0], site["id"])
             continue
-        types = GROUND_UNITS[site["side"]].get(site["role"]) or GROUND_UNITS[site["side"]]["armor"]
-        keep = max(1, round(len(types) * site.get("strength", 1.0)))  # a damaged site: survivors only
-        types = types[:keep]
+        system = (site.get("system") or systems.system_for(site["side"], site["role"])
+                  or systems.system_for(site["side"], "armor"))
+        types = systems.units_for(system, site.get("strength", 1.0))  # a damaged site: survivors only
         g = B.ground(f"{site['side']} {site['role']}", types, pos, country=country,
                      spread=120 if site["role"] == "sam" else 60, site=site["id"])
         B.site_groups.setdefault(site["id"], []).append(g)
-        if site["side"] == "red" and site["role"] in GROUND_THREATS:
-            name, rng_m = GROUND_THREATS[site["role"]]
-            B.b.threats.append({"name": name, "kind": "SAM" if site["role"] == "sam" else "AAA", **_ll(pos),
-                                "range_nm": round(rng_m * M_TO_NM, 1), "note": f"Campaign site near {site['zone']}."})
+        reach, _see = systems.ranges(system, site.get("strength", 1.0))
+        if site["side"] == "red" and site["role"] in ("sam", "shorad") and reach:
+            B.b.threats.append({"name": system, "kind": "SAM" if site["role"] == "sam" else "AAA", **_ll(pos),
+                                "range_nm": round(reach * M_TO_NM, 1), "note": f"Campaign site near {site['zone']}."})
         elif site["side"] == "red" and site["role"] == "ewr":
-            B.b.threats.append({"name": "EWR (1L13)", "kind": "EWR", **_ll(pos), "range_nm": None,
+            B.b.threats.append({"name": f"EWR ({system})", "kind": "EWR", **_ll(pos), "range_nm": None,
                                 "note": f"Early-warning radar near {site['zone']}."})
 
 

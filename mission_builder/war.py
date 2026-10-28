@@ -18,6 +18,7 @@ import math
 import random
 
 from .campaign import Campaign, _dist, _role_name, other
+from .systems import site_ranges, system_for
 
 START = "2010-06-01T06:00:00"      # local time on the map when a war begins
 SQUADRON_SIZE = 12
@@ -464,6 +465,10 @@ def migrate(c: Campaign) -> bool:
         if sq["type"] in ("UH-60A", "Mi-24V") and "CSAR" not in sq["missions"]:
             sq["missions"] = sq["missions"] + ["CSAR"]
             changed = True
+    for s in c.data["sites"]:  # sites from before each had its DCS system: the one missions placed
+        if "system" not in s and system_for(s["side"], s["role"]):
+            s["system"] = system_for(s["side"], s["role"])
+            changed = True
     w = _war(c)
     if w.get("ejections"):  # ejections recorded before there were downed pilots
         by_id = {f["id"]: f for f in w["flights"]}
@@ -510,9 +515,11 @@ def _threat(c: Campaign, f: dict, xy, t: float, gone=frozenset()) -> float:
             if s["id"] in gone:
                 continue
             d = _dist((s["x"], s["y"]), xy)
-            threat += (1.0 if s["role"] == "shorad" and d <= 6_000 else
-                       0.8 if s["role"] == "armor" and d <= 4_000 else
-                       0.3 if s["role"] == "sam" and d <= 15_000 else 0.0)
+            reach = site_ranges(s)[0]   # low and slow: the guns and tanks matter, long-range SAMs less
+            threat += (0.0 if not reach else
+                       1.0 if s["role"] == "shorad" and d <= reach else
+                       0.8 if s["role"] == "armor" and d <= reach else
+                       0.3 if s["role"] == "sam" and d <= min(15_000, reach) else 0.0)
         return threat + 0.5 * len(_enemy_caps(c, f["side"], xy, t, 60_000))
     low = profile == "low"
     threat = 0.0
@@ -521,11 +528,12 @@ def _threat(c: Campaign, f: dict, xy, t: float, gone=frozenset()) -> float:
             continue
         d = _dist((s["x"], s["y"]), xy)
         k = s.get("strength", 1.0)   # a damaged site fights at reduced strength
-        if s["role"] == "sam" and d <= 40_000:
+        reach, see = site_ranges(s)   # its DCS ranges (systems.py)
+        if s["role"] == "sam" and reach and d <= reach:
             threat += k * (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0) * (0.4 if low else 1.0)
-        elif s["role"] == "ewr" and d <= 80_000:
+        elif s["role"] == "ewr" and d <= see:
             threat += k * 0.3 * (0.3 if low else 1.0)
-        elif s["role"] == "shorad" and d <= 8_000:
+        elif s["role"] == "shorad" and reach and d <= reach:
             threat += k * (1.0 if f["heli"] else 0.5) * (2.0 if low else 1.0)
     fighters = (1.0 if f["heli"] else 1.5) * len(_enemy_caps(c, f["side"], xy, t, 100_000))
     if is_night(c, t):
@@ -1025,7 +1033,7 @@ def spectator_ground(c: Campaign, ambient: list[dict], limit: int = 120) -> list
             site = next((s for s in c.data["sites"] if s["id"] == f["target"] and s["alive"]), None)
             if site:
                 picked.setdefault(site["id"], {**{k: site[k] for k in ("id", "side", "role", "x", "y", "zone")},
-                                               "strength": site.get("strength", 1.0)})
+                                               "strength": site.get("strength", 1.0), "system": site.get("system")})
         if len(picked) >= limit:
             break
     return list(picked.values())[:limit]
@@ -1115,7 +1123,14 @@ def ground_sites(c: Campaign, f: dict, ambient: list[dict]) -> list[dict]:
     chosen = sorted(wanted, key=wanted.get)[:MAX_GROUND_SITES]
     by_id = {s["id"]: s for s in c.data["sites"]}
     return [{**{k: by_id[i][k] for k in ("id", "side", "role", "x", "y", "zone")},
-             "strength": by_id[i].get("strength", 1.0)} for i in chosen]
+             "strength": by_id[i].get("strength", 1.0), "system": by_id[i].get("system")} for i in chosen]
+
+
+def site_systems(c: Campaign) -> dict:
+    """For a mission: each live site's system and strength, so a SAM the mission puts on a
+    campaign position is the one the campaign has there."""
+    return {s["id"]: [s.get("system") or system_for(s["side"], s["role"]), s.get("strength", 1.0)]
+            for s in c.data["sites"] if s["alive"] and (s.get("system") or system_for(s["side"], s["role"]))}
 
 
 def _group_site_changes(changes: list[str], side: str) -> list[str]:
@@ -1316,7 +1331,9 @@ def snapshot(c: Campaign) -> dict:
         "front": {"blue": c.front_zones("blue"), "red": c.front_zones("red")}, "zones": zones,
         "fields": [{"name": n, "side": side, "ll": c.data["field_ll"][n]} for n, side in sorted(c.data["fields"].items())],
         "sites": [{"id": s["id"], "side": s["side"], "role": s["role"], "ll": s["ll"], "alive": s["alive"],
-                   "zone": s["zone"]} for s in c.data["sites"]],
+                   "zone": s["zone"], "system": s.get("system"), "strength": s.get("strength", 1.0),
+                   "reach": site_ranges(s)[0] if s["role"] in ("sam", "shorad") else 0,
+                   "see": site_ranges(s)[1] if s["role"] in ("sam", "ewr") else 0} for s in c.data["sites"]],
         "squadrons": [dict(sq, available=available(c, sq)) for sq in w["squadrons"]],
         "ai_only": sorted(AI_ONLY),
         "battles": w.get("battles", []),

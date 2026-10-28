@@ -22,6 +22,7 @@ import uuid
 
 from . import war
 from .campaign import Campaign, _dist, _role_name
+from .systems import site_ranges, system_for
 
 PROVIDERS = {"openrouter": "deepseek/deepseek-v4.1-flash", "anthropic": "claude-opus-5-5"}
 DEFAULT_PROVIDER = "openrouter"
@@ -134,19 +135,31 @@ def schema_for(fields: list[str]) -> dict:
 # --- what Claude is told -------------------------------------------------------------------
 
 def _defences(c: Campaign, site: dict) -> dict:
-    """The other side's air defence that covers a site."""
-    near = {"sam_40km": 0, "shorad_8km": 0, "ewr_80km": 0}
+    """The other side's air defence that covers a site, by each system's DCS range."""
+    near = {"sams_in_range": [], "short_range_in_range": 0, "radars_that_see_it": 0}
     for s in c.alive_sites(site["side"]):
         if s is site:
             continue
         d = _dist((s["x"], s["y"]), (site["x"], site["y"]))
-        if s["role"] == "sam" and d <= 40_000:
-            near["sam_40km"] += 1
-        elif s["role"] == "shorad" and d <= 8_000:
-            near["shorad_8km"] += 1
-        elif s["role"] == "ewr" and d <= 80_000:
-            near["ewr_80km"] += 1
+        reach, see = site_ranges(s)
+        if s["role"] == "sam" and reach and d <= reach:
+            near["sams_in_range"].append(f"{s['id']} {s.get('system') or system_for(s['side'], 'sam')} ({round(d / 1000)} km)")
+        elif s["role"] == "shorad" and reach and d <= reach:
+            near["short_range_in_range"] += 1
+        elif s["role"] == "ewr" and d <= see:
+            near["radars_that_see_it"] += 1
     return near
+
+
+def _system_info(s: dict) -> dict:
+    """What a site is in DCS and how far it reaches (km), for the air defence sites."""
+    if s["role"] not in ("sam", "shorad", "ewr"):
+        return {}
+    reach, see = site_ranges(s)
+    out = {"system": s.get("system") or system_for(s["side"], s["role"]), "radar_km": round(see / 1000)}
+    if s["role"] != "ewr":
+        out["engages_aircraft_within_km"] = round(reach / 1000)
+    return out
 
 
 def situation(c: Campaign, loadouts) -> dict:
@@ -160,7 +173,7 @@ def situation(c: Campaign, loadouts) -> dict:
         sites.append({"id": s["id"], "type": re.sub(r"^(an?|the) ", "", _role_name(s)),
                       "role": s["role"], "zone": s["zone"], "front_line": s["zone"] in front,
                       "km_from_nearest_friendly_field": round(min(_dist((s["x"], s["y"]), b) for b in blue) / 1000),
-                      "covered_by": _defences(c, s)})
+                      "covered_by": _defences(c, s), **_system_info(s)})
     squadrons = []
     for sq in w["squadrons"]:
         if sq["side"] != "blue" or sq["total"] <= 0:

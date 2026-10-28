@@ -65,9 +65,8 @@ spirit of Falcon BMS's dynamic campaign:
   front-line positions (two attacks an hour each). Squadrons that fly the right task go first;
   any strike squadron can take a ground target when they're busy. The map shows each flight
   from takeoff to landing; click one for its route, target and result. **Coverage rings** (top right
-  of the map) show the air defence of either side: SAMs (40 km), short-range air defence (8 km) and
-  early-warning radar (80 km). The radii are the ranges the war's odds use, not each system's exact
-  DCS range. **Map** switches the base map (topographic, satellite, plain) and adds a hillshade
+  of the map) show the air defence of either side: how far SAMs and short-range air defence engage
+  aircraft, and how far early-warning radars see (see **DCS ranges** below). **Map** switches the base map (topographic, satellite, plain) and adds a hillshade
   relief overlay. A selected flight shows its **terrain profile**: ground height along its route
   (Copernicus 90 m elevation data via Open-Meteo) against its altitude, with the lowest clearance;
   stretches within 100 m of the ground are red. Legs at or below 500 m are flown above ground
@@ -145,6 +144,17 @@ spirit of Falcon BMS's dynamic campaign:
     Caucasus and Syria; DeepSeek answers run up to about 19,000 tokens with its reasoning (about $0.002-0.013 an order in tests). The page shows the tokens, reasoning and OpenRouter cost after each answer.
 - **Night.** A time on target between 21:00 and 05:00 counts as night: enemy fighters are less
   effective, and the mission you fly starts at that hour.
+- **DCS ranges.** Every campaign site is a DCS system (`mission_builder/systems.py`): red SAMs are
+  SA-6, red short-range sites ZSU-23-4 + SA-13, red radars 1L13; blue has Hawk, Vulcan + Avenger
+  and Hawk CWAR. The war's odds, the map's rings, the briefing's threat rings and the air
+  commander all use each system's ranges from DCS's unit data (via pydcs): SA-6 engages out to
+  25 km (radar 70 km), Hawk 45 km (90 km), ZSU-23-4 + SA-13 5 km, Vulcan + Avenger 4.5 km, the
+  1L13 sees 300 km and the Hawk CWAR 70 km. A damaged site counts what its surviving units reach:
+  it keeps its radar first, so an SA-6 down to its radar still sees but can no longer shoot. A
+  mission you fly places a campaign site as its own system, including the target of a SEAD
+  mission (before, a SEAD mission could put an SA-11 on a campaign SA-6 position). Extra
+  defences a mission adds that aren't campaign sites (pop-up short-range air defence near the
+  target) are still added and aren't tracked by the campaign.
 - **Downed pilots and rescue.** When an aircraft goes down, its crew may get out (about 70% of jet
   crews and 40% of helicopter crews in the war's own losses; in a DCS mission, every ejection DCS
   reports). Each downed pilot is a ⛑ marker on the map where they came down (the tooltip says

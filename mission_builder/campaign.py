@@ -27,6 +27,7 @@ import secrets
 import zipfile
 from pathlib import Path
 
+from . import systems
 from .scenarios import Scenario
 
 STATE_DIR = Path(__file__).resolve().parent.parent / "campaign"
@@ -136,6 +137,9 @@ class Campaign:
         n = sum(1 for s in self.data["sites"] if s["side"] == side) + 1
         site = {"id": f"{prefix}{n}", "side": side, "role": role, "x": x, "y": y, "ll": self.ll(x, y),
                 "zone": zone, "alive": True}
+        system = systems.system_for(side, role)
+        if system:
+            site["system"] = system   # what DCS places there (systems.py), and so its ranges
         if garrison:
             site["garrison"] = True
         self.data["sites"].append(site)

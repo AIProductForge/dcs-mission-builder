@@ -7,7 +7,8 @@ const $ = (id) => document.getElementById(id);
 const S = { theatre: null, snap: null, at: 0, selected: null, map: null, layers: {}, markers: new Map(), busy: false };
 const COLORS = { blue: "#1f4e8c", red: "#b3261e", dead: "#8a8a80" };
 // Coverage ring radii: the ranges the campaign's odds model uses (war._threat), in metres.
-const RINGS = { sam: 40000, shorad: 8000, ewr: 80000 };
+// Ring radius per role, from each site's DCS ranges: how far it shoots (SAM, short-range), how far it sees (radar).
+const RINGS = { sam: (s) => s.reach, shorad: (s) => s.reach, ewr: (s) => s.see };
 const RING_STYLE = { sam: { weight: 1.2, fillOpacity: 0.05 }, shorad: { weight: 1, dashArray: "4 4", fillOpacity: 0.07 },
                      ewr: { weight: 1, dashArray: "2 6", fillOpacity: 0 } };
 const ROLE = { sam: "SAM site", ewr: "Early-warning radar", shorad: "Short-range air defence", armor: "Armour",
@@ -249,13 +250,24 @@ function ringChoice() {
   return on;
 }
 
+function siteReach(site) {
+  const km = (m) => `${Math.round(m / 1000)} km`;
+  const bits = [];
+  if (site.strength < 1) bits.push(`${Math.round(site.strength * 100)}% strength`);
+  if (site.role === "sam" || site.role === "shorad") bits.push(site.reach ? `engages aircraft out to ${km(site.reach)}` : "can't engage (launchers lost)");
+  if (site.see) bits.push(`radar sees ${km(site.see)}`);
+  return bits.length ? ` · ${bits.join(", ")}` : "";
+}
+
 function drawRings() {
   if (!S.map || !S.snap) return;
   S.layers.rings.clearLayers();
   const on = ringChoice();
   for (const site of S.snap.sites) {
     if (!site.alive || !RINGS[site.role] || !on[site.side] || !on[site.role]) continue;
-    L.circle(site.ll, { radius: RINGS[site.role], color: COLORS[site.side], fillColor: COLORS[site.side],
+    const radius = RINGS[site.role](site);
+    if (!radius) continue;   // e.g. a SAM that has lost its launchers: it still sees, no longer shoots
+    L.circle(site.ll, { radius, color: COLORS[site.side], fillColor: COLORS[site.side],
                         interactive: false, renderer: S.ringRenderer, ...RING_STYLE[site.role] })
       .addTo(S.layers.rings);
   }
@@ -282,8 +294,9 @@ function drawStatic() {
   for (const site of s.sites) {
     L.circleMarker(site.ll, { radius: 3, weight: site.alive ? 0 : 1.2, color: site.alive ? COLORS[site.side] : COLORS.dead,
                               fillColor: COLORS[site.side], fillOpacity: site.alive ? 0.8 : 0 })
-      .bindTooltip(`${site.side === "blue" ? "Friendly" : "Enemy"} ${ROLE[site.role] || site.role} · ${site.zone}` +
-                   `${site.alive ? "" : " (destroyed)"}`, { className: "map-tip" })
+      .bindTooltip(`${site.side === "blue" ? "Friendly" : "Enemy"} ${ROLE[site.role] || site.role}` +
+                   (site.system ? ` (${site.system})` : "") + ` · ${site.zone}` +
+                   (site.alive ? siteReach(site) : " (destroyed)"), { className: "map-tip" })
       .on("click", () => pickTarget(site))
       .addTo(S.layers.sites);
   }

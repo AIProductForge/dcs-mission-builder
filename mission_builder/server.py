@@ -291,7 +291,7 @@ class State:
                     weather=rng.choice(["Clear", "Clear", "Scattered clouds", "Overcast"]), enemy_skill="Good",
                     awacs=True, tanker=False, seed=rng.randrange(1, 2**31), flight=f["id"],
                     loadout=f.get("loadout", "") if f.get("loadout") not in (None, "Default", "Guns only") else "",
-                    target_site=f["target"] or "", target_xy=f["target_xy"])
+                    target_site=f["target"] or "", target_xy=f["target_xy"], site_systems=war.site_systems(c))
                 start = war.player_start(c, f)
                 if start["airborne"]:  # joining a flight in the air, where the map shows it
                     spec.start, spec.spawn_xy, spec.rtb = "In the air", start["xy"], start["past_target"]
