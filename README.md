@@ -60,8 +60,10 @@ spirit of Falcon BMS's dynamic campaign:
 - **Squadrons.** Blue flies aircraft you own (one squadron per module, up to six jets and a
   helicopter); red flies MiG-29S, Su-27, Su-24M, Su-25T, Su-25 and Mi-24V. Squadrons start with
   12 aircraft and get 3 back a day.
-- **ATO.** Every campaign hour each side plans a CAP over the front plus strikes, SEAD and CAS
-  against the other side's front-line positions (blue 2 an hour, red 1). The map shows each flight
+- **ATO.** Every half hour each side plans: a CAP over the front when none is covering it (so a
+  CAP that's shot down is replaced quickly), plus a strike, SEAD or CAS against the other side's
+  front-line positions (two attacks an hour for blue, one for red). Squadrons that fly the right task go first;
+  any strike squadron can take a ground target when they're busy. The map shows each flight
   from takeoff to landing; click one for its route, target and result.
 - **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
   odds depend on the SAMs, short-range air defence and radar around the target and on enemy

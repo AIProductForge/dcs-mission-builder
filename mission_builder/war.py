@@ -22,13 +22,15 @@ from .campaign import Campaign, _dist, _role_name, other
 START = "2010-06-01T06:00:00"      # local time on the map when a war begins
 SQUADRON_SIZE = 12
 REPLENISH_PER_DAY = 3
-PLAN_EVERY = 3600                   # the ATO is planned hourly...
-PLAN_AHEAD = (15 * 60, 75 * 60)     # ...for takeoffs in this window from the planning time
+PLAN_EVERY = 1800                   # the ATO is planned every half hour (a lost CAP is soon replaced)...
+PLAN_AHEAD = (15 * 60, 45 * 60)     # ...for takeoffs in this window from the planning time
 CAP_ON_STATION = 3600
 SPEED = {"jet": 230.0, "heli": 60.0, "orbit": 180.0}   # m/s
 ALT = {"jet": 6500, "heli": 120}
 RANGE = {"jet": 650_000, "heli": 130_000}
-ATTACKS_PER_HOUR = {"blue": 2, "red": 1}
+# Attacks per half-hour plan. Red strikes every other plan (one an hour): the baselines give the
+# blue side far fewer SAMs, and at two an hour red overran blue in 1-3 days in simulation.
+ATTACKS_PER_PLAN = {"blue": 1, "red": 0.5}
 REPAIR_HOURS = (12, 30)             # a destroyed site is back in action this long after, unless its field falls
 KEEP_FINISHED = 2 * 3600            # finished flights stay on the ATO this long
 
@@ -241,22 +243,25 @@ def plan(c: Campaign, now: float, rng: random.Random) -> None:
         # Attacks on the enemy's front-line sites.
         targeted = {f["target"] for f in w["flights"] if _active(f) and f["target"]}
         sites = [s for s in c.alive_sites(enemy) if s["zone"] in front and s["id"] not in targeted]
-        for _ in range(ATTACKS_PER_HOUR[side]):
+        rate = ATTACKS_PER_PLAN[side]
+        w["plans"] = w.get("plans", 0) + (side == "blue")
+        attacks = int(rate) if rate >= 1 else int(w["plans"] % round(1 / rate) == 0)
+        for _ in range(attacks):
             if not sites:
                 break
             rng.shuffle(sites)
             for site in sites[:8]:
-                mission = MISSION_FOR_ROLE.get(site["role"], "Strike")
-                fit = [sq for sq in squadrons if mission in sq["missions"] and available(c, sq) >= 2
+                wanted = MISSION_FOR_ROLE.get(site["role"], "Strike")
+                # Squadrons that fly the right task, and any strike squadron (which can hit any ground target).
+                fit = [(sq, wanted if wanted in sq["missions"] else "Strike") for sq in squadrons
+                       if (wanted in sq["missions"] or "Strike" in sq["missions"]) and available(c, sq) >= 2
                        and _dist(c.data["field_pos"][sq["base"]], (site["x"], site["y"]))
                        <= RANGE["heli" if sq["heli"] else "jet"]]
-                if not fit and mission == "CAS":  # anyone who can hit ground targets
-                    mission = "Strike"
-                    fit = [sq for sq in squadrons if "Strike" in sq["missions"] and available(c, sq) >= 2
-                           and _dist(c.data["field_pos"][sq["base"]], (site["x"], site["y"])) <= RANGE["jet"]]
                 if not fit:
                     continue
-                sq = rng.choice(fit)
+                # Prefer the right task, then whoever has the most aircraft free.
+                best = max((available(c, sq) + (4 if m == wanted else 0)) for sq, m in fit)
+                sq, mission = rng.choice([(sq, m) for sq, m in fit if available(c, sq) + (4 if m == wanted else 0) == best])
                 count = 4 if available(c, sq) >= 8 and rng.random() < 0.35 else 2
                 _new_flight(c, sq, mission, count, rng.uniform(lo, hi), (site["x"], site["y"]), site["id"])
                 sites.remove(site)

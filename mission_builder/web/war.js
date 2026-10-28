@@ -535,9 +535,7 @@ async function clockCmd(body) {
 // Jump in now: freeze the war where it is and point at the flights you can take.
 async function jumpIn() {
   await clockCmd({ paused: true });
-  $("show-blue").checked = true;
-  $("show-red").checked = false;
-  $("show-done").checked = false;
+  $("show-blue").checked = true;  // enemy flights stay listed: you'll want to know what's up there
   renderAto();
   const t = clockNow();
   const air = S.snap.flights.filter((f) => f.side === "blue" && f.status === "airborne" && !S.snap.ai_only.includes(f.type)
