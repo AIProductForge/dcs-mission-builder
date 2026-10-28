@@ -16,6 +16,7 @@ POST /api/war/clock {theatre, rate, paused}  run, pause or change the clock's sp
 POST /api/war/fly {theatre, flight}          take a friendly flight and save its .miz: a planned one at its
                                              takeoff, an airborne one now (jump in), where the map shows it
 POST /api/war/release {theatre}              give a taken flight back to the AI
+POST /api/war/spectate {theatre}             save a mission with no player aircraft: watch the war in DCS
 POST /api/war/schedule {theatre, squadron, mission, count, tot, target | station | field}
                                              frag a mission onto the ATO (tot null = ASAP)
 POST /api/war/cancel {theatre, flight}       scrub a friendly flight that hasn't taken off
@@ -372,6 +373,37 @@ class State:
             c.save()
             return {"fragged": [f["id"] for f in done], "problems": problems, "war": self.war.snapshot(c)}
 
+    def spectate(self, theatre: str) -> dict:
+        """Pause the war and save it as a mission to watch in DCS (no player aircraft)."""
+        g, war = self.gen, self.war
+        with self.lock:
+            c = self.campaigns[theatre]
+            began = war.spectate(c)
+            try:
+                when = war.clock_datetime(c)
+                rng = random.Random()
+                home = (c.fields_of("blue") or list(c.data["fields"]))[0]
+                spec = g.MissionSpec(terrain=theatre, aircraft="F-16C_50", airport=home,
+                                     scenario=self.baselines[theatre].name, mission_type="Free flight",
+                                     date=when.date().isoformat(), hour=when.hour, minute=when.minute,
+                                     weather=rng.choice(["Clear", "Clear", "Scattered clouds"]),
+                                     enemy_skill="Good", seed=rng.randrange(1, 2**31))
+                ambient = war.ambient_flights(c, "")
+                ground = war.spectator_ground(c, ambient)
+                mission, briefing = g.build_spectator(spec, ambient, ground)
+                out_dir = Path(self.config["output_dir"])
+                out_dir.mkdir(parents=True, exist_ok=True)
+                path = out_dir / f"Watch_{theatre}_{war.clock_label(c).replace(' ', '_').replace(':', '')}.miz"
+                mission.save(str(path))
+                if briefing.sortie:
+                    c.register_sortie(briefing.sortie, str(path), "Spectate", "", briefing.tracked)
+                    c.data["sorties"][-1]["began"] = began
+            except Exception:
+                war.release_flight(c)
+                raise
+            c.save()
+            return {"path": str(path), "flights": len(ambient), "ground": len(ground), "war": war.snapshot(c)}
+
     def release(self, theatre: str) -> dict:
         with self.lock:
             c = self.campaigns[theatre]
@@ -484,6 +516,8 @@ def make_handler(state: State):
                                                                 body.get("site")))
                 if self.path == "/api/commander/execute":
                     return self._json(200, state.commander_execute(body["theatre"], body["plan"], body["option"]))
+                if self.path == "/api/war/spectate":
+                    return self._json(200, state.spectate(body["theatre"]))
                 if self.path == "/api/war/release":
                     return self._json(200, state.release(body["theatre"]))
                 if self.path == "/api/campaign/reset":

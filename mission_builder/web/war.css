@@ -115,3 +115,5 @@ details.commander textarea { width: 100%; background: #10120f; color: var(--pane
   text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 6px #f2a93b; pointer-events: auto; }
 .battle.kill { color: #e0574d; text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 8px #e0574d; }
 .map-legend i.battle-key { color: #f2a93b; font-style: normal; }
+.jump-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.jump-row .btn.jump { margin-top: 0; }

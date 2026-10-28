@@ -1123,6 +1123,42 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
     return m, b
 
 
+def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict]) -> tuple[Mission, "Briefing"]:
+    """A mission with no player aircraft: the campaign's flights and ground forces as they are
+    at spec's date and time. DCS opens it in spectator mode. Results come back like any other."""
+    B = _Builder(spec)
+    m = B.m
+    home = B.home
+    B.b = b = Briefing(codename="WATCH", dtg=_dtg(m.start_time, getattr(B.terrain, "utc_offset", None)),
+                       theatre=spec.terrain, scenario=B.sc.name if B.sc else "None", aircraft="", flight_size=0,
+                       callsign="", mission_type="Spectate", complexity="", mission_statement="Spectator mission.",
+                       loadout="", stores=[], home={"name": home.name, **_ll(home.position)},
+                       objective={"name": "", **_ll(home.position), "brg": 0, "dist_nm": 0}, enemy_field="")
+    add_ground(B, ground)
+    add_ambient(B, ambient)
+    if B.sc:
+        for n in B.sc.blue_fields:
+            if n in B.terrain.airports:
+                B.terrain.airports[n].set_blue()
+        for n in B.sc.red_fields:
+            if n in B.terrain.airports:
+                B.terrain.airports[n].set_red()
+    wx = WEATHER[spec.weather]
+    if wx is not None:
+        m.weather.clouds_preset = wx.value
+        m.weather.clouds_base = 2500
+    if B.tracked_units:
+        b.sortie = campaign.new_sortie_id()
+        t = TriggerStart(comment="Campaign results")
+        t.add_action(InlineDoScript(campaign.results_script(b.sortie, B.tracked_units)))
+        m.triggerrules.triggers.append(t)
+    m.coalition["blue"].bullseye = {"x": home.position.x, "y": home.position.y}
+    m.set_sortie_text("CAMPAIGN - SPECTATOR")
+    m.set_description_text(f"The {spec.terrain} campaign as it stands: {len(ambient)} flights and "
+                           f"{len(ground)} ground positions. No player aircraft: watch from the F10 map and views.")
+    return m, b
+
+
 def build_with_retries(spec: MissionSpec, locks: set[str], owned: list[str], terrains: list[str],
                        attempts: int = 6) -> tuple[MissionSpec, Mission, Briefing]:
     """Build; if the home field has no parking for this flight, reroll unpinned fields and retry."""

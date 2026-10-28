@@ -838,12 +838,47 @@ def take_flight(c: Campaign, flight_id: str) -> dict:
 
 
 def release_flight(c: Campaign) -> None:
-    """Give up on flying the taken flight: the AI flies it and the clock can run again."""
+    """Give up on flying the taken flight (or watching): the AI flies it and the clock can run again."""
     w = _war(c)
     f = next((x for x in w["flights"] if x["id"] == w["player_flight"]), None)
     if f and not f.get("flown"):
         f["player"] = False
     w["mode"], w["player_flight"] = "running", None
+    w.pop("spectating", None)
+
+
+def spectate(c: Campaign) -> float:
+    """Pause the war for a mission with no player in it: the war as it is now, to watch in DCS.
+    Returns the campaign time the mission starts at."""
+    w = _war(c)
+    if w["mode"] == "in_dcs":
+        raise RuntimeError("A mission is already out to DCS. Fly it, or give it back, first.")
+    w["mode"], w["paused"], w["player_flight"] = "in_dcs", True, None
+    w["spectating"] = w["clock"]
+    c.log(f"{clock_label(c)} · You watch the war in DCS from here.", side="blue", t=w["clock"])
+    return w["clock"]
+
+
+def spectator_ground(c: Campaign, ambient: list[dict], limit: int = 120) -> list[dict]:
+    """Ground forces for a spectator mission: everything alive near any flight in it (closest
+    first), plus what those flights are going after."""
+    picked: dict[str, dict] = {}
+    for a in ambient:
+        f = next((g for g in _war(c)["flights"] if g["id"] == a["id"]), None)
+        if not f:
+            continue
+        for site in ground_sites(c, f, []):
+            picked.setdefault(site["id"], site)
+            if len(picked) >= limit:
+                break
+        if f.get("target"):  # ground_sites leaves out a flight's own target
+            site = next((s for s in c.data["sites"] if s["id"] == f["target"] and s["alive"]), None)
+            if site:
+                picked.setdefault(site["id"], {**{k: site[k] for k in ("id", "side", "role", "x", "y", "zone")},
+                                               "strength": site.get("strength", 1.0)})
+        if len(picked) >= limit:
+            break
+    return list(picked.values())[:limit]
 
 
 def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[dict]:
@@ -988,9 +1023,13 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
             schedule_repair(s, w["clock"], rng)
     if w["player_flight"] == sortie.get("flight"):
         w["mode"], w["player_flight"] = "running", None
-    if not mine:
+    watched = sortie.get("began") is not None and not mine   # a spectator mission
+    if not mine and not watched:
         return []
-    began = mine.get("joined_at", mine["takeoff"])
+    began = sortie["began"] if watched else mine.get("joined_at", mine["takeoff"])
+    if watched and w.get("spectating") is not None:
+        w["mode"], w["player_flight"] = "running", None
+        w.pop("spectating", None)
     end_t = began + flown
     # DCS's end state for every flight that was active in the mission.
     landed_away, carried_on = [], 0
@@ -1040,9 +1079,11 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
         parts.append(f"{carried_on} flight{'s carry' if carried_on > 1 else ' carries'} on from where DCS left {'them' if carried_on > 1 else 'it'}")
     if report.get("ejects"):
         parts.append(f"{len(report['ejects'])} pilot{'s' if len(report['ejects']) > 1 else ''} ejected")
-    summary = (f"{clock_label(c)} · Back from DCS after {round(flown / 60)} min: {mine['callsign']} "
-               f"({mine['type']}, {mine['mission']}): " + ("; ".join(parts) if parts else "no losses either side") + ".")
-    c.log(summary, mine["mission"], mine["type"], side="blue", t=w["clock"], sortie=sortie["id"], debrief=True)
+    who = "watched in DCS" if watched else f"{mine['callsign']} ({mine['type']}, {mine['mission']})"
+    summary = (f"{clock_label(c)} · Back from DCS after {round(flown / 60)} min: {who}: "
+               + ("; ".join(parts) if parts else "no losses either side") + ".")
+    c.log(summary, "" if watched else mine["mission"], "" if watched else mine["type"], side="blue",
+          t=w["clock"], sortie=sortie["id"], debrief=True)
     if report.get("ejects"):
         w.setdefault("ejections", []).extend(
             {"unit": u, "t": began + t, "x": x, "y": y, "ll": c.ll(x, y)} for u, t, x, y in report["ejects"])
@@ -1060,7 +1101,7 @@ def snapshot(c: Campaign) -> dict:
     return {
         "theatre": c.theatre, "scenario": c.data["scenario"], "start": w["start"], "clock": w["clock"],
         "clock_label": clock_label(c), "rate": w["rate"], "paused": w["paused"], "mode": w["mode"],
-        "player_flight": w["player_flight"], "stats": w["stats"],
+        "player_flight": w["player_flight"], "stats": w["stats"], "spectating": w.get("spectating") is not None,
         "front": {"blue": c.front_zones("blue"), "red": c.front_zones("red")}, "zones": zones,
         "fields": [{"name": n, "side": side, "ll": c.data["field_ll"][n]} for n, side in sorted(c.data["fields"].items())],
         "sites": [{"id": s["id"], "side": s["side"], "role": s["role"], "ll": s["ll"], "alive": s["alive"],

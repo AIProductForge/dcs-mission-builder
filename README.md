@@ -96,6 +96,11 @@ spirit of Falcon BMS's dynamic campaign:
   sides and aircraft lost, from `dcs.log`), the war moves on by the time you spent in the mission
   and stays paused there, and the map shows a "Back from DCS" summary. **Give back to AI**
   hands the flight back unflown.
+- **Watch in DCS.** Saves the war as it is now as a mission with no player aircraft: every flight
+  airborne (where the map shows it) and launching in the next 90 minutes, and the ground forces
+  near them (up to 120 positions). DCS opens it in spectator mode; watch from the F10 map and the
+  views. The war stays paused, and the results come back through the handoff like any flown
+  mission, so it continues from what DCS did. **Give back to AI** cancels it.
 - **Frag a mission.** Add your own missions to the ATO (a "frag": the order that adds or
   changes a mission on an ATO). Pick any friendly squadron and any task it flies: Strike, SEAD or
   CAS against any enemy site, on the front line or deep behind it, or CAP over a station (over a

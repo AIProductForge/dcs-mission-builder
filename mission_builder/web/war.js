@@ -453,12 +453,22 @@ function renderClock() {
   $("btn-run").classList.toggle("on", !s.paused);
   $("btn-run").disabled = s.mode !== "running";
   $("btn-jump").disabled = s.mode !== "running" || !!S.offline;
+  $("btn-watch").disabled = s.mode !== "running" || !!S.offline;
   for (const b of document.querySelectorAll(".rate")) b.classList.toggle("on", Number(b.dataset.rate) === s.rate);
   $("clock-state").textContent = S.offline ? "server stopped" : s.mode === "in_dcs" ? "in DCS" : s.paused ? "paused" : `running ${s.rate}×`;
   $("clock-state").classList.toggle("live", running());
   $("scenario").textContent = `${s.scenario} · losses: friendly ${s.stats.blue_lost}, enemy ${s.stats.red_lost}` +
                               (s.won ? " · CAMPAIGN WON" : s.lost ? " · CAMPAIGN LOST" : "");
   const pf = s.flights.find((f) => f.id === s.player_flight);
+  if (s.mode === "in_dcs" && s.spectating) {
+    $("dcs-banner").hidden = false;
+    $("dcs-text").textContent = "A spectator mission is saved: the war as it was, with no player aircraft. Open it in DCS " +
+      "(My Missions → Generated) and watch from the F10 map and the views. The war stays paused and continues from " +
+      "what DCS did once the results are read from dcs.log.";
+    $("btn-briefing").hidden = true;
+    return;
+  }
+  $("btn-briefing").hidden = false;
   $("dcs-banner").hidden = s.mode !== "in_dcs";
   if (pf) $("dcs-text").textContent = `${pf.callsign} (${pf.count}× ${pf.type}, ${flightTask(pf)}) is saved as a mission. ` +
     "Fly it in DCS: the war stays paused and resumes from takeoff once the results are read from dcs.log.";
@@ -885,6 +895,18 @@ async function boot() {
   for (const id of ["show-blue", "show-red", "show-done"]) $(id).addEventListener("change", renderAto);
   $("btn-fly").addEventListener("click", fly);
   $("btn-jump").addEventListener("click", jumpIn);
+  $("btn-watch").addEventListener("click", async () => {
+    if (S.busy) return;
+    S.busy = true;
+    setStatus("Building the spectator mission…");
+    try {
+      const res = await api("/api/war/spectate", { theatre: S.theatre });
+      take(res.war, true);
+      setStatus(`Saved ${res.path}: ${res.flights} flights and ${res.ground} ground positions. It's in DCS under ` +
+                "Mission → My Missions → Generated.", "ok");
+    } catch (e) { setStatus(e.message, "err"); }
+    S.busy = false;
+  });
   $("btn-scrub").addEventListener("click", async () => {
     try { take(await api("/api/war/cancel", { theatre: S.theatre, flight: S.selected }), false); setStatus("Flight scrubbed."); }
     catch (e) { setStatus(e.message, "err"); }
