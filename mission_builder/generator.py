@@ -274,20 +274,44 @@ def _pylons(payload) -> list:
     return [(pylons[k]["num"], {"clsid": pylons[k]["CLSID"]}) for k in pylons]
 
 
+def _store(name: str) -> tuple[str, int]:
+    """One pylon's store as (label, count). Racks count the weapons on them ("MPRL - 8 x
+    GBU-31(V)3/B - JDAM..." -> 8x GBU-31(V)3/B); rocket pods and dispensers count as one
+    pod with their contents ("B-8M1 - 20 x UnGd Rkts, 80 mm S-8KOM..." -> B-8M1 (20x 80 mm S-8KOM))."""
+    m = re.match(r"^(?:(?P<rack>.+?)\s+(?:-|with)\s+)?(?P<n>\d+)\s*x\s*(?P<what>.+)$", name)
+    if m:
+        n, what, rack = int(m["n"]), m["what"], m["rack"]
+        if what.startswith("UnGd Rkts,"):
+            what = what.split(",", 1)[1].strip()
+        short = re.split(r"\s+-\s+|,", what)[0].strip()
+        short = re.sub(r"\s+on\s+\S+$", "", short)          # "AGM-86D on MER"
+        short = re.sub(r"^LAU-\d+\s+(?=AIM)", "", short)      # "LAU-127 AIM-120C AMRAAM"
+        short = re.sub(r"\s+(Blast/Fragmentation|HEAT/Frag|HE/Frag|Dispenser.*)$", "", short)
+        if rack and re.search(r"Rkts|Dispenser|Autocannon|CBU (Medium|Heavy)|mm ", name):
+            return f"{rack} ({n}x {short})", 1
+        return short, n
+    rack = re.match(r"^(.*?)\s*\*\s*(\d+)$", name)          # "GBU-38 * 3"
+    if rack:
+        return rack.group(1), int(rack.group(2))
+    single = re.match(r"^\S+ with (.+)$", name.split(" - ")[0])  # "LAU-117 with AGM-65F"
+    if single:
+        return single.group(1).strip(), 1
+    return name.split(" - ")[0].strip(), 1
+
+
 def stores_summary(pylons) -> list[str]:
-    """Human-readable store list, e.g. ['2x AIM-120C AMRAAM', '1x Fuel tank 610 gal']."""
+    """Human-readable store list, e.g. ['2x AIM-120C AMRAAM', '24x GBU-31(V)3/B']."""
     from dcs.weapons_data import weapon_ids
     counts: dict[str, int] = {}
     for _station, p in pylons or []:
+        if p["clsid"] == "<CLEAN>":  # an empty station
+            continue
         w = weapon_ids.get(p["clsid"])
-        name = (w["name"] if w else p["clsid"]).split(" - ")[0].strip()
-        # Multi-carriage racks are named like "GBU-38 * 3": count the bombs, not the rack.
-        rack = re.match(r"^(.*?)\s*\*\s*(\d+)$", name)
-        counts[rack.group(1) if rack else name] = counts.get(rack.group(1) if rack else name, 0) + \
-            (int(rack.group(2)) if rack else 1)
+        label, n = _store(w["name"] if w else p["clsid"])
+        counts[label] = counts.get(label, 0) + n
     # A rack's short name ("GBU-38") folds into the full one ("GBU-38(V)1/B") when both appear.
     for short in sorted(counts, key=len):
-        longer = next((k for k in counts if k != short and k.startswith(short)), None)
+        longer = next((k for k in counts if k != short and k.startswith(short) and "(" not in short), None)
         if longer:
             counts[longer] += counts.pop(short)
     return [f"{n}x {name}" for name, n in counts.items()]
@@ -610,7 +634,7 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             B.tracked_units.append(u.name)
             if country is B.red:
                 u.skill = B.skill
-        _arm(g, ptype, mission, maintask)
+        loadout, stores = _arm(g, ptype, mission, maintask, a.get("loadout", ""))
         for wp in a["route"]:
             p = Point(wp["x"], wp["y"], B.terrain)
             if wp["name"] == "LAND" and a["base"] in B.terrain.airports:
@@ -641,11 +665,20 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             t.add_action(action.ActivateGroup(g.id))
             B.m.triggerrules.triggers.append(t)
         route = [_ll(Point(a["x"], a["y"], B.terrain))] + [_ll(Point(w["x"], w["y"], B.terrain)) for w in a["route"]]
-        entry = {"name": f"{a['count']}x {a['type']} ({a['mission']})", "route": route}
+        entry = {"name": f"{a['count']}x {a['type']} ({a['mission']})", "route": route, "stores": stores}
+        carrying = f"{', '.join(stores)} each" if stores else "guns only"
         if a["side"] == "blue":
             B.b.friendly_air.append(entry)
+            B.b.execution.append(f"{a.get('callsign', a['id'])} ({a['count']}x {a['type']}, {a['mission']}"
+                                 + (", airborne" if a["delay"] == 0 else f", launches +{round(a['delay'] / 60)} min")
+                                 + f"): {carrying}.")
         else:
             B.b.enemy_air.append(entry)
+            B.b.threats.append({"name": f"{a['count']}x {a['type']}", "kind": "AIR", "lat": route[0]["lat"],
+                                "lon": route[0]["lon"], "range_nm": None,
+                                "note": f"{a['mission']}"
+                                        + (" (airborne)" if a["delay"] == 0 else f", launches +{round(a['delay'] / 60)} min")
+                                        + f". Assessed load: {carrying}."})
 
 
 # Ground forces for a campaign site, by side and role (see add_ground).

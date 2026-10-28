@@ -86,7 +86,14 @@ spirit of Falcon BMS's dynamic campaign:
   friendly or enemy airfield, or a point you click on the map; it holds for an hour). Set the
   number of aircraft and either "as soon as possible" or a time on target / on station (e.g.
   Day 2 02:00 for a night strike: the route is timed back from it). Click an enemy site on the
-  map to target it. **Scrub this flight** removes a friendly flight that hasn't taken off.
+  map to target it. **Loadout** picks one of the aircraft's stored loadouts (suited ones first) or
+  leaves it automatic, and shows what it carries. **Scrub this flight** removes a friendly flight
+  that hasn't taken off.
+- **Ordnance.** Every flight on the ATO records its loadout when it's planned; click a flight to
+  see what each aircraft carries. A mission built from the campaign loads the same loadout on
+  every flight in it (yours included), and its briefing lists what each friendly flight carries
+  and an assessed load for each enemy flight. The war's own strike results don't depend on
+  ordnance: they come from type, flight size and the defences.
 - **Bombers.** Blue also has an F-117A (8), B-1B (6) and B-52H (6) squadron at its rearmost
   airfield with a runway. They are AI-only in DCS, and they fly only missions you frag. The
   F-117 mostly slips past SAMs and fighters; B-1B and B-52 cells hit harder and can take out up

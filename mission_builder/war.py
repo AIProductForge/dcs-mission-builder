@@ -55,6 +55,17 @@ MISSION_FOR_ROLE = {"sam": "SEAD", "ewr": "SEAD", "structure": "Strike", "missil
                     "armor": "CAS", "shorad": "CAS", "farp": "Strike"}
 
 
+# (type id, mission, chosen loadout name or "") -> (loadout name, [stores]). Set by the server
+# from the generator, so the ATO shows exactly what the mission will load.
+LOADOUTS = None
+
+
+def _arm_flight(f: dict, chosen: str = "") -> None:
+    if LOADOUTS:
+        name, stores = LOADOUTS(f["type"], f["mission"], chosen)
+        f["loadout"], f["stores"] = name, list(stores)
+
+
 def _war(c: Campaign) -> dict:
     return c.data["war"]
 
@@ -182,7 +193,8 @@ def available(c: Campaign, sq: dict) -> int:
     return sq["total"] - committed
 
 
-def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float, target_xy, target_site=None):
+def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float, target_xy, target_site=None,
+                loadout: str = ""):
     w = _war(c)
     w["seq"] += 1
     route, marks = _route(c, sq, mission, target_xy, takeoff)
@@ -196,6 +208,7 @@ def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float,
     if target_site:
         site = next(s for s in c.data["sites"] if s["id"] == target_site)
         f["target_name"] = f"{_role_name(site)} near {site['zone']}"
+    _arm_flight(f, loadout)
     w["flights"].append(f)
     return f
 
@@ -459,7 +472,7 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
 # --- strikes the player schedules --------------------------------------------------------
 
 def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float | None,
-             site_id: str | None = None, station=None) -> dict:
+             site_id: str | None = None, station=None, loadout: str = "") -> dict:
     """Frag a mission onto the ATO: this squadron flies `mission` with `count` aircraft.
     Strike/SEAD/CAS go against an enemy site anywhere (front or deep); CAP holds a station
     ([x, y]) for an hour. `tot` is the campaign time on target / on station (None: as soon as
@@ -488,7 +501,7 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
     reach = BOMBER_RANGE if sq.get("manual") else RANGE["heli" if sq["heli"] else "jet"]
     if _dist(c.data["field_pos"][sq["base"]], target) > reach:
         raise RuntimeError(f"That's out of range for {sq['type']} from {sq['base']}.")
-    f = _new_flight(c, sq, mission, count, w["clock"] + 10 * 60, target, site["id"] if site else None)
+    f = _new_flight(c, sq, mission, count, w["clock"] + 10 * 60, target, site["id"] if site else None, loadout)
     if where:
         f["target_name"] = where
     key = "station" if mission == "CAP" else "tot"
@@ -508,7 +521,9 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
     c.log(f"{clock_label(c)} · Fragged {f['callsign']} ({count}x {sq['type']}, {mission}) "
           f"{'holding' if mission == 'CAP' else 'against'} {f['target_name']}, "
           f"{'on station' if key == 'station' else 'on target'} {clock_label(c, f[key])}"
-          f"{' (night)' if f['night'] else ''}.", mission, sq["type"], side="blue", t=w["clock"])
+          f"{' (night)' if f['night'] else ''}"
+          + (f", carrying {', '.join(f['stores'])}" if f.get("stores") else "") + ".",
+          mission, sq["type"], side="blue", t=w["clock"])
     return f
 
 
@@ -592,6 +607,7 @@ def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[
                 continue
             out.append({"id": f["id"], "side": f["side"], "type": f["type"], "count": f["count"], "heli": f["heli"],
                         "mission": f["mission"], "target": f.get("target"), "target_xy": f.get("target_xy"),
+                        "loadout": f.get("loadout", ""), "callsign": f["callsign"],
                         "x": x, "y": y, "alt": f["route"][0]["alt"],
                         "speed": f["route"][0]["speed"], "route": rest, "delay": round(at - now),
                         "base": f["base"]})
@@ -709,6 +725,9 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
 
 def snapshot(c: Campaign) -> dict:
     w = _war(c)
+    for f in w["flights"]:
+        if "stores" not in f:
+            _arm_flight(f)
     zones = {side: [{"field": n, **c.zone_status(n)} for n in c.fields_of(side)] for side in ("blue", "red")}
     return {
         "theatre": c.theatre, "scenario": c.data["scenario"], "start": w["start"], "clock": w["clock"],

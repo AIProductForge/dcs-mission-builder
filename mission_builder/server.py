@@ -4,6 +4,7 @@ GET  /                      the briefing page (web/index.html)
 GET  /api/options           owned aircraft, maps, choice lists, last session
 GET  /api/airports?terrain=&aircraft=&scenario=&side=   the player's side's airfields for that aircraft
 GET  /api/loadouts?aircraft=            stored loadouts for that aircraft
+GET  /api/stores?aircraft=&mission=&loadout=   what that loadout carries (loadout "" = best match)
 GET  /api/campaign                      every map's campaign state (checks dcs.log for results first)
 POST /api/generate {values, locks, reroll}  -> {values, briefing}
 POST /api/save                               -> {path}; registers the sortie with the map's campaign
@@ -26,6 +27,7 @@ closing the browser tab is all it takes to quit.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -93,6 +95,7 @@ class State:
             self.campaigns[theatre] = campaign.Campaign.load_or_new(theatre, base, TERRAINS[theatre]())
         from . import war
         self.war = war
+        war.LOADOUTS = self.loadout_for
         self._blue_types = None
         for theatre, c in self.campaigns.items():
             if "war" not in c.data:
@@ -139,6 +142,16 @@ class State:
                 (helis if heli else jets).append((a, missions, heli))
             self._blue_types = jets[:6] + helis[:1]
         return self._blue_types
+
+    @functools.lru_cache(maxsize=None)
+    def loadout_for(self, type_id: str, mission: str, chosen: str = "") -> tuple[str, list[str]]:
+        """What a flight of this type carries for this mission: the chosen stored loadout, or the
+        generator's best match (the same choice the mission makes)."""
+        g = self.gen
+        mission = mission if mission in g.PAYLOAD_KEYWORDS else "CAP"
+        ut = g.unit_type(type_id)
+        pylons, name = g._payload(ut, mission, g._main_task(ut, mission), chosen)
+        return (name if pylons else "Guns only"), g.stores_summary(pylons)
 
     @staticmethod
     def jet_fields(theatre: str) -> set[str]:
@@ -266,6 +279,7 @@ class State:
                     date=when.date().isoformat(), hour=when.hour, minute=when.minute,
                     weather=rng.choice(["Clear", "Clear", "Scattered clouds", "Overcast"]), enemy_skill="Good",
                     awacs=True, tanker=False, seed=rng.randrange(1, 2**31), flight=f["id"],
+                    loadout=f.get("loadout", "") if f.get("loadout") not in (None, "Default", "Guns only") else "",
                     target_site=f["target"] or "", target_xy=f["target_xy"])
                 start = war.player_start(c, f)
                 if start["airborne"]:  # joining a flight in the air, where the map shows it
@@ -287,14 +301,14 @@ class State:
                     "war": war.snapshot(c)}
 
     def schedule(self, theatre: str, squadron: str, mission: str, count: int, tot, target=None,
-                 station=None, field=None) -> dict:
+                 station=None, field=None, loadout: str = "") -> dict:
         with self.lock:
             c = self.campaigns[theatre]
             if field and not station:  # CAP over an airfield
                 station = c.data["field_pos"][field]
             elif station and len(station) == 2 and abs(station[0]) <= 90 and abs(station[1]) <= 180:
                 station = self.latlon_to_xy(c, *station)  # a point clicked on the map
-            f = self.war.schedule(c, squadron, mission, count, tot, target, station)
+            f = self.war.schedule(c, squadron, mission, count, tot, target, station, loadout or "")
             c.save()
             return {"flight": f["id"], "war": self.war.snapshot(c)}
 
@@ -371,6 +385,10 @@ def make_handler(state: State):
                         return self._json(404, {"error": "No mission built yet."})
                     spec, _, briefing = state.current
                     return self._json(200, {"values": asdict(spec), "briefing": briefing.to_dict()})
+                if url.path == "/api/stores":
+                    q = {k: v[0] for k, v in parse_qs(url.query).items()}
+                    name, stores = state.loadout_for(q["aircraft"], q.get("mission", "Strike"), q.get("loadout", ""))
+                    return self._json(200, {"loadout": name, "stores": stores})
                 if url.path == "/api/loadouts":
                     aircraft = parse_qs(url.query)["aircraft"][0]
                     g = state.gen
@@ -411,7 +429,7 @@ def make_handler(state: State):
                     return self._json(200, state.schedule(body["theatre"], body["squadron"],
                                                           body.get("mission", "Strike"), body.get("count", 2),
                                                           body.get("tot"), body.get("target"), body.get("station"),
-                                                          body.get("field")))
+                                                          body.get("field"), body.get("loadout", "")))
                 if self.path == "/api/war/cancel":
                     return self._json(200, state.cancel(body["theatre"], body["flight"]))
                 if self.path == "/api/war/release":

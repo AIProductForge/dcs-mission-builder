@@ -79,3 +79,5 @@ details.plan .btn { width: 100%; }
 .btn.jump { width: 100%; margin-top: 8px; border-color: var(--pin); color: var(--pin); }
 .btn.jump:hover:not(:disabled) { background: var(--pin); color: var(--accent-ink); }
 .campaign .events li.debrief { color: var(--pin); border-left: 2px solid var(--pin); padding-left: 6px; }
+.stores-line { color: var(--panel-text); }
+.stores-line b { color: var(--pin); font-weight: 600; }

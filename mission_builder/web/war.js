@@ -206,6 +206,12 @@ function renderSelected() {
   if (f.result) lines.push(`Result: ${f.result}.`);
   if (f.losses) lines.push(`Losses: ${f.losses}.`);
   $("sel-text").textContent = lines.join(" ");
+  $("sel-stores").innerHTML = "";
+  if (f.loadout) {
+    $("sel-stores").innerHTML = "<b></b> ";
+    $("sel-stores").querySelector("b").textContent = `Loadout ${f.loadout.replace(/^Liberation\s+/i, "")}:`;
+    $("sel-stores").append(f.stores && f.stores.length ? `${f.stores.join(", ")} (each aircraft).` : "guns only.");
+  }
   const open = f.side === "blue" && f.status === "planned" && t < f.takeoff && S.snap.mode === "running";
   // A friendly flight in the air can be joined now, where it is (not when it's about to land).
   const joinable = f.side === "blue" && f.status === "airborne" && !f.player && f.count > 0 && inAir(f, t) &&
@@ -302,6 +308,48 @@ function renderMissions() {
   $("p-when-tot").textContent = cap ? "Time on station…" : "Time on target…";
   $("p-time-label").textContent = cap ? "On station (local)" : "On target (local)";
   drawCapPoint();
+  renderLoadouts();
+}
+
+// Stored loadouts for the squadron's aircraft, the ones suited to the mission first.
+async function renderLoadouts() {
+  const sq = S.snap.squadrons.find((x) => x.id === $("p-squadron").value);
+  const sel = $("p-loadout"), keep = sel.value, mission = $("p-mission").value;
+  if (!sq) return;
+  S.loadoutCache = S.loadoutCache || {};
+  if (!S.loadoutCache[sq.type]) {
+    try { S.loadoutCache[sq.type] = await api(`/api/loadouts?aircraft=${encodeURIComponent(sq.type)}`); }
+    catch (e) { S.loadoutCache[sq.type] = []; }
+  }
+  const list = S.loadoutCache[sq.type];
+  sel.innerHTML = '<option value="">Automatic (best match)</option>';
+  for (const [title, items] of [[`Suited to ${mission}`, list.filter((l) => l.suits.includes(mission))],
+                                ["Other", list.filter((l) => !l.suits.includes(mission))]]) {
+    if (!items.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = title;
+    for (const l of items) {
+      const o = document.createElement("option");
+      o.value = l.name;
+      o.textContent = l.name.replace(/^Liberation\s+/i, "");
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
+  }
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  showStores();
+}
+
+async function showStores() {
+  const sq = S.snap.squadrons.find((x) => x.id === $("p-squadron").value);
+  if (!sq) return;
+  const q = new URLSearchParams({ aircraft: sq.type, mission: $("p-mission").value, loadout: $("p-loadout").value });
+  try {
+    const r = await api(`/api/stores?${q}`);
+    $("p-stores").innerHTML = "<b></b> ";
+    $("p-stores").querySelector("b").textContent = `${r.loadout.replace(/^Liberation\s+/i, "")}:`;
+    $("p-stores").append(r.stores.length ? `${r.stores.join(", ")} (each aircraft).` : "guns only.");
+  } catch (e) { $("p-stores").textContent = ""; }
 }
 
 function renderPlan() {
@@ -401,7 +449,7 @@ function pickTarget(site) {
 async function fragMission() {
   const mission = $("p-mission").value;
   const body = { theatre: S.theatre, squadron: $("p-squadron").value, mission,
-                 count: Number($("p-count").value), tot: planTot() };
+                 count: Number($("p-count").value), tot: planTot(), loadout: $("p-loadout").value };
   if (mission === "CAP") {
     const st = $("p-station").value;
     if (st === "point") {
@@ -542,6 +590,7 @@ async function boot() {
   $("p-squadron").addEventListener("change", () => { renderMissions(); planNote(); });
   $("p-mission").addEventListener("change", () => { renderMissions(); planNote(); });
   $("p-station").addEventListener("change", () => { drawCapPoint(); planNote(); });
+  $("p-loadout").addEventListener("change", showStores);
   $("p-when").addEventListener("change", () => { $("p-tot-row").hidden = $("p-when").value !== "tot"; planNote(); });
   for (const id of ["p-squadron", "p-day", "p-time"]) $(id).addEventListener("change", planNote);
   $("plan").addEventListener("toggle", () => { if ($("plan").open) renderPlan(); drawCapPoint(); });
