@@ -118,6 +118,7 @@ spirit of Falcon BMS's dynamic campaign:
   of its zone (Hawk batteries in DCS), so red's two strikes an hour meet real defences.
 - **Bombers.** Blue also has an F-117A (8), B-1B (6) and B-52H (6) squadron at its rearmost
   airfield with a runway. They are AI-only in DCS, and they fly only missions you frag. The
+  The planner also uses them against heavily defended targets (see below). The
   F-117 mostly slips past SAMs and fighters; B-1B and B-52 cells hit harder and can take out up
   to two more sites within 2-3 km of the aimpoint, but they are easier to shoot down. To fly
   with them, frag your own flight with a matching time on target (an F-15E two minutes
@@ -152,6 +153,18 @@ spirit of Falcon BMS's dynamic campaign:
   sites, an SA-11 as 1.4, an SA-15 as 0.8 (a judgement; the ranges are DCS data). There is no
   S-400 in DCS's own units (pydcs lists none), so the S-300PS is the top Russian system. A field red
   captures gets its tier's defences too.
+- **Packages against heavy air defence.** When the SAMs over a target add up to 1.5 or more
+  (an SA-10 alone is 2), the planner doesn't send ordinary strike or SEAD flights. It goes after
+  the strongest SAM covering the target first (rolling the defences back), and picks the best of:
+  F-117s (night only), long-range stand-off missiles (B-52 with AGM-86 from 400 km, B-1B, Hornet
+  and F-16 with AGM-154 JSOW, Su-24M with Kh-31P), or for red a Scud salvo from a missile battery
+  within 280 km (one per battery every 6 hours, 35% to hit). Stand-off weapons have to get through:
+  the defences over the target shoot some down, so numbers win (a B-52 counts as two pairs of
+  shooters). It sends nothing when no option has a 25% chance. Constants at the top of `war.py`
+  (`HEAVY_DEFENCE`, `STANDOFF_HIT`, `STANDOFF_DEFENCE`, `AI_BOMBERS`).
+- **Turnaround.** Aircraft fly again only after a turnaround: jets 4 hours, helicopters 2, the
+  bombers 24 (so a bomber you frag may show as unavailable after the planner used it). The
+  planner uses blue's bombers too (`AI_BOMBERS`).
 - **DCS ranges.** Every campaign site is a DCS system (`mission_builder/systems.py`): red SAMs are
   SA-6 unless they're airbase defence (above), red short-range sites ZSU-23-4 + SA-13, red radars
   1L13; blue has Hawk, Vulcan + Avenger and Hawk CWAR. The war's odds, the map's rings, the briefing's threat rings and the air

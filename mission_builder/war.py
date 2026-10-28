@@ -87,6 +87,24 @@ STEALTH = {"F-117A"}
 # Extra sites a heavy bomber's load can take out around its aimpoint (radius m, max extra sites).
 CARPET = {"B-52H": (3000, 2), "B-1B": (2000, 2)}
 NIGHT_HOURS = (21, 5)       # local time-on-target from 21:00 to 05:00 counts as night
+# Heavily defended targets (SAM threat to an ordinary jet over them, see _ad_defence): the
+# planner doesn't send ordinary strike or SEAD flights in; it sends stealth bombers, long-range
+# stand-off missiles in numbers (saturation), or ballistic missiles, and goes after the SAM that
+# covers a target before the target itself. Below this, ordinary packages as before.
+HEAVY_DEFENCE = 1.5
+AI_BOMBERS = True             # may the planner use blue's bombers (else they fly only what you frag)
+MIN_PACKAGE_HIT = 0.25
+STANDOFF_HIT = 0.45             # per pair of stand-off shooters (a heavy bomber counts as two), undefended
+STANDOFF_DEFENCE = 0.5          # ...divided by 1 + this x the air defence over the target, which shoots weapons down
+# Turnaround: an aircraft flies again this long after landing (fuel, arming, crew rest).
+REST = {"bomber": 24 * 3600, "jet": 4 * 3600, "heli": 2 * 3600}
+LOSS_COST = 0.6                 # how much one expected aircraft lost weighs against a hit
+# Stand-off weapons that outrange the big SAMs, and how far from the target they're released.
+LONG_STANDOFF = {"AGM-86": 400_000, "AGM-158": 250_000, "Kh-59": 150_000, "AGM-154": 110_000, "Kh-31": 90_000}
+# Ballistic missiles from a missile site (red's Scud batteries): one salvo per site every MISSILE_REST.
+MISSILE_REACH = 280_000
+MISSILE_REST = 6 * 3600
+MISSILE_HIT = 0.35              # a Scud salvo on a point target: inaccurate, nothing in DCS shoots it down
 MISSION_FOR_ROLE = {"sam": "SEAD", "ewr": "SEAD", "structure": "Strike", "missile": "Strike",
                     "armor": "CAS", "shorad": "CAS", "farp": "Strike"}
 
@@ -94,6 +112,21 @@ MISSION_FOR_ROLE = {"sam": "SEAD", "ewr": "SEAD", "structure": "Strike", "missil
 # (type id, mission, chosen loadout name or "") -> (loadout name, [stores]). Set by the server
 # from the generator, so the ATO shows exactly what the mission will load.
 LOADOUTS = None
+# type id -> [(loadout name, [stores])]: every stored loadout, set by the server (for stand-off picks).
+LOADOUT_LIST = None
+_STANDOFF_CACHE: dict[str, tuple[str, int] | None] = {}
+
+
+def _standoff_loadout(type_id: str) -> tuple[str, int] | None:
+    """The type's loadout with the longest-reaching stand-off weapon, and its release distance."""
+    if type_id not in _STANDOFF_CACHE:
+        best = None
+        for name, stores in (LOADOUT_LIST(type_id) if LOADOUT_LIST else []):
+            reach = max((r for k, r in LONG_STANDOFF.items() for st in stores if k in st), default=0)
+            if reach and (not best or reach > best[1]):
+                best = (name, reach)
+        _STANDOFF_CACHE[type_id] = best
+    return _STANDOFF_CACHE[type_id]
 
 
 def _arm_flight(f: dict, chosen: str = "") -> None:
@@ -194,7 +227,7 @@ def _side_step(a, b, metres):
 
 
 def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float,
-           profile: str = "standard") -> tuple[list[dict], dict]:
+           profile: str = "standard", standoff: float = STANDOFF_RANGE) -> tuple[list[dict], dict]:
     kind = "heli" if sq["heli"] else "jet"
     base = c.data["field_pos"][sq["base"]]
     speed, alt = sq.get("speed", SPEED[kind]), sq.get("alt", ALT[kind])
@@ -219,7 +252,7 @@ def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float,
         pts.append(("EXTRACT", lz, speed))
         waits[len(pts) - 1] = SOF_ON_GROUND / 2
     elif profile == "standoff":
-        launch = _toward(target, base, STANDOFF_RANGE) if _dist(base, target) > STANDOFF_RANGE else base
+        launch = _toward(target, base, standoff) if _dist(base, target) > standoff else base
         pts.append(("TARGET", launch, speed))  # weapons release point
         marks["tot"] = len(pts) - 1
         pts.append(("EGRESS", _side_step(target, launch, 20_000), speed))
@@ -260,15 +293,26 @@ def _active(f: dict) -> bool:
 
 
 def available(c: Campaign, sq: dict) -> int:
-    committed = sum(f["count"] for f in _war(c)["flights"] if f["squadron"] == sq["id"] and _active(f))
+    w = _war(c)
+    committed = sum(f["count"] for f in w["flights"] if f["squadron"] == sq["id"] and _active(f))
+    committed += sum(n for until, n in sq.get("resting", []) if until > w["clock"])
     return sq["total"] - committed
 
 
+def _landed(c: Campaign, f: dict, t: float) -> None:
+    """A flight is down: its aircraft are turned around (REST) before they fly again."""
+    f["status"], f["end"] = "landed", t
+    sq = next((q for q in _war(c)["squadrons"] if q["id"] == f["squadron"]), None)
+    if sq and f["count"] > 0:
+        rest = REST["bomber" if sq.get("manual") else "heli" if sq["heli"] else "jet"]
+        sq["resting"] = [r for r in sq.get("resting", []) if r[0] > t] + [[round(t + rest), f["count"]]]
+
+
 def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float, target_xy, target_site=None,
-                loadout: str = "", profile: str = "standard", commit: bool = True):
+                loadout: str = "", profile: str = "standard", commit: bool = True, standoff: float = STANDOFF_RANGE):
     w = _war(c)
     w["seq"] += 1
-    route, marks = _route(c, sq, mission, target_xy, takeoff, profile)
+    route, marks = _route(c, sq, mission, target_xy, takeoff, profile, standoff)
     names = CALLSIGNS[sq["side"]]
     f = {"id": f"{sq['side'][0].upper()}{w['seq']}", "side": sq["side"], "squadron": sq["id"],
          "callsign": f"{names[w['seq'] % len(names)]} {1 + (w['seq'] // len(names)) % 9}",
@@ -280,6 +324,8 @@ def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float,
         site = next(s for s in c.data["sites"] if s["id"] == target_site)
         f["target_name"] = f"{_role_name(site)} near {site['zone']}"
     f["profile"] = profile
+    if profile == "standoff":
+        f["launch_xy"] = [f["route"][[r["name"] for r in route].index("TARGET")][k] for k in ("x", "y")]
     _arm_flight(f, loadout)
     if commit:
         w["flights"].append(f)
@@ -316,6 +362,7 @@ def plan(c: Campaign, now: float, rng: random.Random) -> None:
         # Attacks on the enemy's front-line sites.
         targeted = {f["target"] for f in w["flights"] if _active(f) and f["target"]}
         sites = [s for s in c.alive_sites(enemy) if s["zone"] in front and s["id"] not in targeted]
+        heavy = {s["id"] for s in sites if _ad_defence(c, side, (s["x"], s["y"])) >= HEAVY_DEFENCE}
         rate = ATTACKS_PER_PLAN[side]
         w["plans"] = w.get("plans", 0) + (side == "blue")
         attacks = int(rate) if rate >= 1 else int(w["plans"] % round(1 / rate) == 0)
@@ -324,6 +371,11 @@ def plan(c: Campaign, now: float, rng: random.Random) -> None:
                 break
             rng.shuffle(sites)
             for site in sites[:8]:
+                if site["id"] in heavy:
+                    if _plan_heavy(c, side, site, lo, hi, targeted, rng):
+                        sites.remove(site)
+                        break
+                    continue
                 wanted = MISSION_FOR_ROLE.get(site["role"], "Strike")
                 # Squadrons that fly the right task, and any strike squadron (which can hit any ground target).
                 fit = [(sq, wanted if wanted in sq["missions"] else "Strike") for sq in squadrons
@@ -339,6 +391,91 @@ def plan(c: Campaign, now: float, rng: random.Random) -> None:
                 _new_flight(c, sq, mission, count, rng.uniform(lo, hi), (site["x"], site["y"]), site["id"])
                 sites.remove(site)
                 break
+
+
+def _ad_defence(c: Campaign, side: str, xy, gone=frozenset()) -> float:
+    """The enemy air defence over xy as an ordinary jet attacking it meets it: each SAM in
+    range by its weight and strength, short-range sites at half."""
+    total = 0.0
+    for s in c.alive_sites(other(side)):
+        if s["id"] in gone or s["role"] not in ("sam", "shorad"):
+            continue
+        reach, _ = site_ranges(s)
+        if reach and _dist((s["x"], s["y"]), xy) <= reach:
+            total += s.get("strength", 1.0) * (WEIGHT.get(s.get("system"), 1.0) if s["role"] == "sam" else 0.5)
+    return total
+
+
+def _covering_sams(c: Campaign, side: str, site: dict) -> list[dict]:
+    """Enemy SAM sites whose missiles reach this site, strongest first (roll these back first)."""
+    xy = (site["x"], site["y"])
+    out = [s for s in c.alive_sites(other(side)) if s["role"] == "sam" and s is not site
+           and site_ranges(s)[0] and _dist((s["x"], s["y"]), xy) <= site_ranges(s)[0]]
+    return sorted(out, key=lambda s: -WEIGHT.get(s.get("system"), 1.0) * s.get("strength", 1.0))
+
+
+def _plan_heavy(c: Campaign, side: str, site: dict, lo: float, hi: float, targeted: set, rng: random.Random) -> bool:
+    """A package for a heavily defended target. The SAM covering it is attacked first (roll-back);
+    the means is the best of: stealth bombers, long-range stand-off missiles in numbers, a ballistic
+    missile salvo. Returns True if something was sent."""
+    w = _war(c)
+    cover = [s for s in _covering_sams(c, side, site) if s["id"] not in targeted]
+    target = cover[0] if cover and site["role"] != "sam" else site
+    xy = (target["x"], target["y"])
+    options = []   # (value, kind, args)
+    for sq in w["squadrons"]:
+        if sq["side"] != side or sq["heli"] or sq["total"] <= 0 or available(c, sq) < 2 or                 (sq.get("manual") and not AI_BOMBERS):
+            continue
+        reach = BOMBER_RANGE if sq.get("manual") else RANGE["jet"]
+        if _dist(c.data["field_pos"][sq["base"]], xy) > reach:
+            continue
+        mission = "SEAD" if target["role"] in ("sam", "ewr") and "SEAD" in sq["missions"] else "Strike"
+        if mission not in sq["missions"]:
+            continue
+        count = min(4, available(c, sq)) if sq["type"] in STEALTH or sq.get("manual") else 4 if available(c, sq) >= 4 else 2
+        tries = []
+        if sq["type"] in STEALTH and is_night(c, hi):   # the F-117 strikes by night
+            tries.append(("standard", "", STANDOFF_RANGE))
+        so = _standoff_loadout(sq["type"])
+        if so:
+            tries.append(("standoff", so[0], so[1]))
+        for profile, loadout, dist in tries:
+            f = _new_flight(c, sq, mission, count, rng.uniform(lo, hi), xy, target["id"], loadout=loadout,
+                            profile=profile, commit=False, standoff=dist)
+            p_hit, p_loss = strike_odds(c, f, f["tot"])
+            options.append((p_hit - LOSS_COST * p_loss * count, p_hit, "flight", (sq, mission, count, f, loadout, profile, dist)))
+    missiles = [m for m in c.alive_sites(side) if m["role"] == "missile" and side == "red"
+                and _dist((m["x"], m["y"]), xy) <= MISSILE_REACH and lo - m.get("fired", -1e9) >= MISSILE_REST]
+    if missiles:
+        options.append((MISSILE_HIT, MISSILE_HIT, "missile", missiles[0]))
+    options = [o for o in options if o[1] >= MIN_PACKAGE_HIT]
+    if not options:
+        return False
+    _, _, kind, args = max(options, key=lambda o: o[0])
+    if kind == "missile":
+        _missile_salvo(c, args, target, lo, rng)
+    else:
+        sq, mission, count, f, loadout, profile, dist = args
+        _new_flight(c, sq, mission, count, f["takeoff"], xy, target["id"], loadout=loadout, profile=profile,
+                    standoff=dist)
+    targeted.add(target["id"])
+    return True
+
+
+def _missile_salvo(c: Campaign, battery: dict, target: dict, t: float, rng: random.Random) -> None:
+    """A ballistic missile salvo from a missile site: settled when fired (minutes of flight)."""
+    battery["fired"] = t
+    hit = target["alive"] and rng.random() < MISSILE_HIT * battery.get("strength", 1.0)
+    what = f"{_role_name(target)} near {target['zone']}"
+    if hit:
+        target["alive"] = False
+        schedule_repair(target, t, rng)
+    c.log(f"{clock_label(c, t)} · Ballistic missile salvo from the missile battery near {battery['zone']} "
+          f"{'destroyed' if hit else 'missed'} {what}.", "Missile", "Scud-B", side=battery["side"], t=t)
+    if hit:
+        for change in c.capture_check(battery["side"], t):
+            c.log(f"{clock_label(c, t)} · {change}", side=battery["side"], t=t)
+            _after_capture(c, t)
 
 
 # --- resolution ---------------------------------------------------------------------------
@@ -556,10 +693,13 @@ def strike_odds(c: Campaign, f: dict, t: float, gone=frozenset(), count: int | N
     if profile == "sof" or f["mission"] == "SOF":
         threat = _threat(c, f, f["target_xy"], t, gone)
         return max(0.15, 0.7 - 0.1 * threat), min(0.3, 0.03 + 0.05 * threat)
-    if profile == "standoff":  # danger is at the release point; the weapons do the rest
+    if profile == "standoff":  # danger is at the release point; the weapons have to get through
         threat = _threat(c, f, f.get("launch_xy") or f["target_xy"], t, gone)
-        pairs = count / 2
-        return 1 - (1 - 0.55) ** pairs, min(0.25, 0.01 + 0.02 * threat)
+        # Saturation: each pair's weapons get through the defences over the target less often,
+        # but a heavy bomber's load counts as two pairs, so numbers win.
+        per_pair = STANDOFF_HIT / (1 + STANDOFF_DEFENCE * _ad_defence(c, f["side"], f["target_xy"], gone))
+        pairs = count * (2 if f["type"] in CARPET else 1) / 2
+        return 1 - (1 - per_pair) ** pairs, min(0.25, 0.01 + 0.02 * threat)
     threat = _threat(c, f, f["target_xy"], t, gone)
     # Odds per pair of aircraft over the target; a heavy bomber carries a pair's worth of bombs or more.
     pairs = count * (2 if f["type"] in CARPET else 1) / 2
@@ -815,7 +955,7 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
         elif kind == "intercept":
             resolve_intercept(c, f, rng)
         elif kind == "land":
-            f["status"], f["end"] = "landed", t
+            _landed(c, f, t)
     w["clock"] = max(w["clock"], to_t)
     keep = w["clock"] - KEEP_FINISHED
     before = len(w["flights"])
@@ -1243,7 +1383,8 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
         landing = next((v for k, v in (report.get("lands") or {}).items() if k.startswith(f"MBF:{fid}:")), None)
         if landing and not air:
             place, lt = landing
-            f["status"], f["end"], f["landed_at"] = "landed", began + lt, place
+            _landed(c, f, began + lt)
+            f["landed_at"] = place
             if place and place != f["base"]:
                 landed_away.append(f"{f['callsign']} landed at {place}")
         elif air:

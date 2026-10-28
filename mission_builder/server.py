@@ -102,6 +102,7 @@ class State:
         from . import war
         self.war = war
         war.LOADOUTS = self.loadout_for
+        war.LOADOUT_LIST = self.loadout_list
         self._blue_types = None
         for theatre, c in self.campaigns.items():
             if "war" not in c.data:
