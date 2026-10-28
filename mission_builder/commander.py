@@ -53,6 +53,9 @@ on target when that matters (e.g. SEAD two minutes before the strike).
 in DCS, so prefer giving the player at least one flyable flight in an option when it fits.
 
 Rules for your answer:
+- Range: a squadron with "can_reach_site_ids" may only be given targets from that list (and CAP \
+stations from "cap_stations_in_range"); one with "reaches_all_enemy_sites" can take any target. If no \
+squadron of the kind you want can reach the target, use a different kind or leave that option out.
 - Use only squadron ids, site ids and airfield names that appear in the situation. Never ask for more \
 aircraft than a squadron has available, or targets outside its range.
 - Offer 3 to 5 genuinely different options (for example: a stealth night strike, a SEAD-escorted \
@@ -164,10 +167,19 @@ def situation(c: Campaign, loadouts) -> dict:
             continue
         reach = (war.SOF_RANGE if "SOF" in sq["missions"] else war.BOMBER_RANGE if sq.get("manual")
                  else war.RANGE["heli" if sq["heli"] else "jet"])
-        squadrons.append({"id": sq["id"], "type": sq["type"], "base": sq["base"], "missions": sq["missions"],
-                          "available": war.available(c, sq), "range_km": round(reach / 1000),
-                          "ai_only": sq["type"] in war.AI_ONLY, "helicopter": sq["heli"],
-                          "loadouts": [{"name": n, "stores": st} for n, st in loadouts(sq["type"])][:14]})
+        base = c.data["field_pos"][sq["base"]]
+        # What it can reach, worked out here: models don't do the distance arithmetic reliably.
+        reachable = [s["id"] for s in c.alive_sites("red") if _dist(base, (s["x"], s["y"])) <= reach]
+        entry = {"id": sq["id"], "type": sq["type"], "base": sq["base"], "missions": sq["missions"],
+                 "available": war.available(c, sq), "range_km": round(reach / 1000),
+                 "ai_only": sq["type"] in war.AI_ONLY, "helicopter": sq["heli"],
+                 "loadouts": [{"name": n, "stores": st} for n, st in loadouts(sq["type"])][:14]}
+        if len(reachable) == len(c.alive_sites("red")):
+            entry["reaches_all_enemy_sites"] = True
+        else:
+            entry["can_reach_site_ids"] = reachable  # the ONLY targets this squadron may be given
+            entry["cap_stations_in_range"] = [n for n, xy in c.data["field_pos"].items() if _dist(base, xy) <= reach]
+        squadrons.append(entry)
     caps = []
     for f in w["flights"]:
         if f["side"] == "red" and f["mission"] == "CAP" and f["status"] == "airborne":
@@ -222,7 +234,9 @@ def _ask_openrouter(text: str, model: str, schema: dict) -> dict:
         "response_format": {"type": "json_schema",
                             "json_schema": {"name": "courses_of_action", "strict": True, "schema": schema}},
         "provider": {"require_parameters": True},
-        "max_tokens": 16000,
+        # The model's reasoning counts against this, and a capture plan on a big map has many
+        # frags: 16,000 cut answers off. At DeepSeek V4.1 Flash's price 40,000 is under 2 cents.
+        "max_tokens": 40000,
     }
     req = urllib.request.Request(OPENROUTER_URL, data=json.dumps(body).encode("utf-8"), method="POST", headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json",
@@ -258,6 +272,7 @@ def _ask_openrouter(text: str, model: str, schema: dict) -> dict:
     plan = _parse((choice.get("message") or {}).get("content") or "")
     u = data.get("usage") or {}
     plan["usage"] = {"input_tokens": u.get("prompt_tokens"), "output_tokens": u.get("completion_tokens"),
+                     "reasoning_tokens": (u.get("completion_tokens_details") or {}).get("reasoning_tokens"),
                      "model": data.get("model", model), "cost": u.get("cost")}
     return plan
 

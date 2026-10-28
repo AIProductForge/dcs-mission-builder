@@ -130,7 +130,7 @@ spirit of Falcon BMS's dynamic campaign:
     variable); `{"provider": "anthropic", "model": "claude-opus-5-5"}` uses Claude instead (key in
     `ANTHROPIC_API_KEY`). Restart Mission Builder after changing it. Each order is one API call; the
     situation sent is about 6,000 tokens on the Gulf, Nevada and Marianas and 12,000-14,000 on
-    Caucasus and Syria. The page shows the tokens (and OpenRouter's cost) after each answer.
+    Caucasus and Syria; DeepSeek answers run up to about 19,000 tokens with its reasoning (about $0.002-0.013 an order in tests). The page shows the tokens, reasoning and OpenRouter cost after each answer.
 - **Night.** A time on target between 21:00 and 05:00 counts as night: enemy fighters are less
   effective, and the mission you fly starts at that hour.
 

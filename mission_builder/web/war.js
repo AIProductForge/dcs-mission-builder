@@ -535,7 +535,10 @@ function renderPlanResult(plan) {
   if (plan.usage) {
     const u = document.createElement("p");
     u.className = "campaign-line";
-    u.textContent = `${plan.usage.model}: ${plan.usage.input_tokens} tokens in, ${plan.usage.output_tokens} out.`;
+    const us = plan.usage;
+    u.textContent = `${us.model}: ${us.input_tokens} tokens in, ${us.output_tokens} out` +
+      (us.reasoning_tokens ? ` (${us.reasoning_tokens} reasoning)` : "") +
+      (typeof us.cost === "number" ? ` · $${us.cost.toFixed(4)}` : "") + ".";
     box.appendChild(u);
   }
 }
