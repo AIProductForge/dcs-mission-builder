@@ -60,6 +60,8 @@ package, a low-level attack, a stand-off missile strike, a special forces raid),
 for them exist. Give each a short name, the concept in two or three sentences, and the main risk.
 - For a capture order, plan enough strikes on that airfield's zone to meet what it still needs, air \
 defence first, spread over the next hours.
+- Every CAP frag must set cap_station_field to an airfield name from the situation (the one nearest \
+the area it protects); leave target_site_id empty for CAP.
 - time_on_target: tot_day 0 and tot_time "" for as soon as possible; otherwise the campaign day number \
 and "HH:MM" local, which must be later than the current time plus the flight's transit.
 - loadout: "" lets the app pick the best stored loadout; otherwise a loadout name exactly as listed.
@@ -73,7 +75,8 @@ _FRAG = {
         "mission": {"type": "string", "enum": ["Strike", "SEAD", "CAS", "CAP", "SOF"]},
         "count": {"type": "integer"},
         "target_site_id": {"type": "string", "description": "enemy site id; empty for CAP"},
-        "cap_station_field": {"type": "string", "description": "airfield to hold CAP over; empty otherwise"},
+        "cap_station_field": {"type": "string",
+                              "description": "for CAP: the airfield to hold the station over (required); empty otherwise"},
         "loadout": {"type": "string", "description": "stored loadout name, or empty for automatic"},
         "profile": {"type": "string", "enum": list(war.PROFILES)},
         "tot_day": {"type": "integer", "description": "campaign day of the time on target; 0 = asap"},
@@ -115,6 +118,14 @@ SCHEMA = {
 
 class CommanderError(RuntimeError):
     pass
+
+
+def schema_for(fields: list[str]) -> dict:
+    """SCHEMA with cap_station_field limited to this map's airfield names (or empty)."""
+    out = json.loads(json.dumps(SCHEMA))
+    out["properties"]["options"]["items"]["properties"]["frags"]["items"]["properties"]["cap_station_field"]["enum"] = \
+        [""] + sorted(fields)
+    return out
 
 
 # --- what Claude is told -------------------------------------------------------------------
@@ -192,12 +203,13 @@ def ask(order: str, sit: dict, picked_site: dict | None = None, provider: str = 
         raise CommanderError(f"Unknown commander provider {provider!r} in config.json (use "
                              f"{' or '.join(PROVIDERS)}).")
     model = model or PROVIDERS[provider]
+    schema = schema_for([a["name"] for a in sit.get("airfields", [])])
     if provider == "openrouter":
-        return _ask_openrouter(text, model)
-    return _ask_anthropic(text, model)
+        return _ask_openrouter(text, model, schema)
+    return _ask_anthropic(text, model, schema)
 
 
-def _ask_openrouter(text: str, model: str) -> dict:
+def _ask_openrouter(text: str, model: str, schema: dict) -> dict:
     """OpenRouter's chat completions API with a strict JSON schema, routed only to endpoints
     that support it (provider.require_parameters)."""
     key = os.environ.get("OPENROUTER_API_KEY")
@@ -208,7 +220,7 @@ def _ask_openrouter(text: str, model: str) -> dict:
         "model": model,
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
         "response_format": {"type": "json_schema",
-                            "json_schema": {"name": "courses_of_action", "strict": True, "schema": SCHEMA}},
+                            "json_schema": {"name": "courses_of_action", "strict": True, "schema": schema}},
         "provider": {"require_parameters": True},
         "max_tokens": 16000,
     }
@@ -264,7 +276,7 @@ def _parse(body: str) -> dict:
     return plan
 
 
-def _ask_anthropic(text: str, model: str) -> dict:
+def _ask_anthropic(text: str, model: str, schema: dict) -> dict:
     try:
         import anthropic
     except ImportError as e:
@@ -277,7 +289,7 @@ def _ask_anthropic(text: str, model: str) -> dict:
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
             thinking={"type": "adaptive"},
-            output_config={"effort": "high", "format": {"type": "json_schema", "schema": SCHEMA}},
+            output_config={"effort": "high", "format": {"type": "json_schema", "schema": schema}},
             system=SYSTEM,
             messages=[{"role": "user", "content": text}],
         )
@@ -319,13 +331,47 @@ def _tot_seconds(c: Campaign, day: int, hhmm: str) -> float | None:
     return (when - start).total_seconds()
 
 
+def _field_named(c: Campaign, name: str) -> str | None:
+    """An airfield by name, forgiving case and partial names ("kish" -> "Kish Intl")."""
+    name = (name or "").strip().lower()
+    if not name:
+        return None
+    exact = next((n for n in c.data["field_pos"] if n.lower() == name), None)
+    return exact or next((n for n in c.data["field_pos"] if name in n.lower() or n.lower() in name), None)
+
+
+def _default_station(c: Campaign, frag: dict, objective: dict | None):
+    """Where a CAP the model didn't place should go: over its target, else over the plan's
+    objective, else the usual station over the front. Returns ([x, y], why)."""
+    by_id = {s["id"]: s for s in c.data["sites"]}
+    if frag.get("target_site_id") in by_id:
+        s = by_id[frag["target_site_id"]]
+        return [s["x"], s["y"]], f"over its target near {s['zone']}"
+    if objective and objective.get("field"):
+        return c.data["field_pos"][objective["field"]], f"over {objective['field']}"
+    if objective and objective.get("sites") and objective["sites"][0] in by_id:
+        s = by_id[objective["sites"][0]]
+        return [s["x"], s["y"]], f"over the objective near {s['zone']}"
+    front = c.front_zones("blue")
+    own = c.fields_of("blue")
+    if front and own:
+        tgt = c.data["field_pos"][front[0]]
+        mine = min(own, key=lambda n: _dist(c.data["field_pos"][n], tgt))
+        return war._toward(c.data["field_pos"][mine], tgt, 0.4 * _dist(c.data["field_pos"][mine], tgt)), "over the front"
+    return None, ""
+
+
 def build_frag(c: Campaign, frag: dict, commit: bool) -> dict:
     """One frag order as a flight (scheduled when commit), or raises RuntimeError with the reason."""
     station = None
     if frag["mission"] == "CAP":
-        if frag["cap_station_field"] not in c.data["field_pos"]:
-            raise RuntimeError(f"unknown CAP station {frag['cap_station_field']!r}")
-        station = c.data["field_pos"][frag["cap_station_field"]]
+        if frag.get("cap_station_xy"):
+            station = frag["cap_station_xy"]
+        else:
+            name = _field_named(c, frag["cap_station_field"])
+            if not name:
+                raise RuntimeError(f"no CAP station given ({frag['cap_station_field']!r} isn't an airfield)")
+            station = c.data["field_pos"][name]
     tot = _tot_seconds(c, frag["tot_day"], frag["tot_time"])
     return war.schedule(c, frag["squadron_id"], frag["mission"], frag["count"], tot,
                         frag["target_site_id"] or None, station, frag["loadout"] or "",
@@ -345,7 +391,14 @@ def evaluate(c: Campaign, plan: dict) -> dict:
     for opt in plan["options"]:
         flights, frags = [], []
         for frag in opt["frags"]:
-            row = {"spec": frag, "purpose": frag["purpose"], "type": sq_type.get(frag["squadron_id"], "?"),
+            frag = dict(frag)
+            note = ""
+            if frag["mission"] == "CAP" and not _field_named(c, frag["cap_station_field"]):
+                xy, why = _default_station(c, frag, objective)
+                if xy:  # the model left the station out: place it sensibly rather than drop the CAP
+                    frag["cap_station_xy"], frag["target_site_id"] = [round(xy[0]), round(xy[1])], ""
+                    note = f" (station chosen by the app: {why})"
+            row = {"spec": frag, "purpose": frag["purpose"] + note, "type": sq_type.get(frag["squadron_id"], "?"),
                    "count": frag["count"], "mission": frag["mission"], "profile": frag["profile"]}
             try:
                 f = build_frag(c, frag, commit=False)
