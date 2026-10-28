@@ -143,6 +143,16 @@ spirit of Falcon BMS's dynamic campaign:
 
 Left alone, the war moves slowly and not always your way; your sorties are what tip it.
 
+**Mission ⇄ campaign handoff.** DCS is the truth for whatever was in the mission, for as long as it
+ran. Besides kills, the mission reports every 5 minutes (and at the end) where each campaign flight
+is, how many aircraft it has left, its fuel and whether it's airborne; landings (and where);
+ejections; and how many units of each campaign site survived. When it comes back, flights that
+were in it land where DCS landed them or carry on from where DCS left them (a CAP with time and
+fuel left returns to its station; others head home), the engine doesn't roll dice for them inside
+that window, and damaged sites keep a strength (counted at that strength in the odds and placed
+with their surviving units in the next mission) until repaired. If DCS crashes before the end,
+the last position report closes the window. See .
+
 **Results from DCS.** Saved missions log each kill of a tracked unit to
 `Saved Games\DCS\Logs\dcs.log` (a mission-start script using `env.info`, which works in a
 stock DCS install; no MissionScripting.lua changes). The app reads the live log and DCS's

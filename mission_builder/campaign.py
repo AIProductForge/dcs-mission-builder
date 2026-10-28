@@ -265,7 +265,7 @@ class Campaign:
                                      "status": "pending", "tracked": tracked, "flight": flight})
         self.save()
 
-    def apply(self, sortie: dict, dead_units: set[str], source: str) -> list[str]:
+    def apply(self, sortie: dict, dead_units: set[str], source: str, hp: dict | None = None) -> list[str]:
         """Mark sites destroyed and fields captured from one flown sortie. Returns what changed.
         Aircraft losses (units named MBF:<flight>:n) are handled by war.after_sortie."""
         killed: dict[str, int] = {}
@@ -279,7 +279,14 @@ class Campaign:
             s = by_id.get(site_id)
             if s and s["alive"] and killed.get(site_id, 0) >= max(1, math.ceil(placed * DESTROYED_SHARE)):
                 s["alive"] = False
+                s.pop("strength", None)
                 changes.append(f"{'Destroyed' if s['side'] == 'red' else 'Lost'} {_role_name(s)} near {s['zone']}.")
+            elif s and s["alive"] and hp and site_id in hp:
+                left, there = hp[site_id]
+                if 0 < left < there:  # survived damaged: it fights (and is placed) at reduced strength
+                    s["strength"] = round(s.get("strength", 1.0) * left / there, 2)
+                    changes.append(f"{'Damaged' if s['side'] == 'red' else 'Lost part of'} {_role_name(s)} near "
+                                   f"{s['zone']} ({left}/{there} left).")
         clock = self.data.get("war", {}).get("clock")
         changes += self.capture_check("blue", clock) + self.capture_check("red", clock)
         sortie["status"] = "flown"
@@ -307,15 +314,33 @@ def new_sortie_id() -> str:
 
 # --- mission side: the Lua that reports results --------------------------------------
 
+POS_EVERY = 300   # mission seconds between position reports
+
+
 def results_script(sortie_id: str, unit_names: list[str]) -> str:
-    """Lua run at mission start. Logs a line to dcs.log for each tracked unit that dies,
-    checked both by event and every 30 s (DCS doesn't always send an event for ground kills)."""
+    """Lua run at mission start: reports what happens to the campaign's units in dcs.log.
+
+    DEAD|unit          a tracked unit died (by event, or found gone by the 30 s sweep after
+                       having been seen alive: units that haven't been activated yet don't count)
+    LAND|unit|place|t  a tracked aircraft landed (place: airbase, FARP or ship name)
+    EJECT|unit|t|x|y   a tracked aircraft's pilot ejected
+    POS|flight|t|x|y|alt|alive|fuel|air   every POS_EVERY s and at the end, per flight seen alive
+    HP|site|alive|placed                   at the end, per campaign site
+    START|n|t / END|t
+    Campaign coordinates are pydcs's: x = DCS x, y = DCS z."""
     names = ",".join(json.dumps(n) for n in unit_names)
     return f"""
 do
   local sortie = "{sortie_id}"
   local tracked = {{{names}}}
-  local dead = {{}}
+  local dead, seen = {{}}, {{}}
+  local flights, sites = {{}}, {{}}
+  for _, n in ipairs(tracked) do
+    local fid = string.match(n, "^MBF:([^:]+):")
+    local sid = string.match(n, "^MB:([^:]+):")
+    if fid then flights[fid] = flights[fid] or {{}}; table.insert(flights[fid], n) end
+    if sid then sites[sid] = sites[sid] or {{}}; table.insert(sites[sid], n) end
+  end
   local function log(s) env.info("{LOG_TAG}|" .. sortie .. "|" .. s) end
   local function mark(name)
     if name and not dead[name] and string.sub(name, 1, 2) == "MB" then
@@ -329,13 +354,57 @@ do
     if ok then return n end
     return nil
   end
+  local function object(n) return Unit.getByName(n) or StaticObject.getByName(n) end
+  local function alive(n)
+    if dead[n] then return false end
+    local u = object(n)
+    if u == nil then return false end
+    local ok, a = pcall(function() return u:isExist() and u:getLife() >= 1 end)
+    return ok and a
+  end
+  local function report()
+    local t = timer.getTime()
+    for fid, list in pairs(flights) do
+      local n, lead = 0, nil
+      for _, name in ipairs(list) do
+        if alive(name) then n = n + 1; lead = lead or Unit.getByName(name) end
+      end
+      local ok, p = pcall(function() return lead and lead:getPoint() end)
+      if lead and ok and p then
+        local okf, fuel = pcall(function() return lead:getFuel() end)
+        local oka, air = pcall(function() return lead:inAir() end)
+        log(string.format("POS|%s|%.0f|%.0f|%.0f|%.0f|%d|%.2f|%d", fid, t, p.x, p.z, p.y, n,
+                          (okf and fuel) or 0, (oka and air) and 1 or 0))
+      end
+    end
+  end
+  local function health()
+    for sid, list in pairs(sites) do
+      local n = 0
+      for _, name in ipairs(list) do if alive(name) then n = n + 1 end end
+      log(string.format("HP|%s|%d|%d", sid, n, #list))
+    end
+  end
   local handler = {{}}
   function handler:onEvent(e)
     if e.id == world.event.S_EVENT_DEAD or e.id == world.event.S_EVENT_UNIT_LOST then
       mark(nameOf(e.initiator))
     elseif e.id == world.event.S_EVENT_KILL then
       mark(nameOf(e.target))
+    elseif e.id == world.event.S_EVENT_LAND then
+      local n = nameOf(e.initiator)
+      if n and string.sub(n, 1, 4) == "MBF:" then
+        log(string.format("LAND|%s|%s|%.0f", n, nameOf(e.place) or "", timer.getTime()))
+      end
+    elseif e.id == world.event.S_EVENT_EJECTION then
+      local n = nameOf(e.initiator)
+      if n and string.sub(n, 1, 4) == "MBF:" then
+        local ok, p = pcall(function() return e.initiator:getPoint() end)
+        log(string.format("EJECT|%s|%.0f|%.0f|%.0f", n, timer.getTime(), (ok and p and p.x) or 0, (ok and p and p.z) or 0))
+      end
     elseif e.id == world.event.S_EVENT_MISSION_END then
+      pcall(report)
+      pcall(health)
       log("END|" .. string.format("%.0f", timer.getTime()))
     end
   end
@@ -343,18 +412,14 @@ do
   local function sweep()
     for _, n in ipairs(tracked) do
       if not dead[n] then
-        local u = Unit.getByName(n) or StaticObject.getByName(n)
-        local gone = (u == nil)
-        if not gone then
-          local ok, alive = pcall(function() return u:isExist() and u:getLife() >= 1 end)
-          gone = ok and not alive
-        end
-        if gone then mark(n) end
+        if alive(n) then seen[n] = true
+        elseif seen[n] then mark(n) end   -- gone after having been seen alive
       end
     end
   end
-  timer.scheduleFunction(function(_, t) pcall(sweep); return t + 30 end, nil, timer.getTime() + 30)
-  log("START|" .. #tracked)
+  timer.scheduleFunction(function(_, t) pcall(sweep); return t + 30 end, nil, timer.getTime() + 1)
+  timer.scheduleFunction(function(_, t) pcall(report); return t + {POS_EVERY} end, nil, timer.getTime() + 5)
+  log("START|" .. #tracked .. "|" .. string.format("%.0f", timer.getTime()))
 end
 """
 
@@ -380,48 +445,71 @@ def _log_texts(logs_dir: Path, since: float, seen_zips: set[str]):
 _STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
 
 
-def scan(logs_dir: Path, sorties: list[dict], seen_zips: set[str], force_live: bool = False):
-    """Results for pending sorties: {sortie id: (dead unit names, source, seconds flown)}.
+def _new_report() -> dict:
+    return {"dead": set(), "end": False, "start": False, "first": None, "last": None, "mission_time": None,
+            "pos": {}, "lands": {}, "ejects": [], "hp": {}, "last_pos_t": 0.0}
 
-    A sortie counts as finished when its END line is logged, when it appears in an
-    archived log (DCS restarted after it), or when force_live is set. Seconds flown is the
-    mission time logged at END, else the time between the sortie's first and last log lines."""
+
+def scan(logs_dir: Path, sorties: list[dict], seen_zips: set[str], force_live: bool = False) -> dict:
+    """Results for pending sorties: {sortie id: report}. A report has "dead" (unit names),
+    "source", "flown" (mission seconds), "pos" ({flight: last (t, x, y, alt, alive, fuel, air)}),
+    "lands" ({unit: (place, t)}), "ejects", "hp" ({site: (alive, placed)}).
+
+    A sortie counts as finished when its END line is logged, when it appears in an archived log
+    (DCS restarted after it), or when force_live is set. Seconds flown is the mission time logged
+    at END, else the last position report's time, else the span of the sortie's log lines."""
     pending = {s["id"]: s for s in sorties if s["status"] == "pending"}
     if not pending or not logs_dir.is_dir():
         return {}
     since = min(dt.datetime.fromisoformat(s["saved"]).timestamp() for s in pending.values()) - 60
-    found: dict[str, tuple[set, str, float]] = {}
-    pat = re.compile(rf"{LOG_TAG}\|([0-9a-f]+)\|(\w+)(?:\|(\S+))?")
+    found: dict[str, dict] = {}
+    tag = f"{LOG_TAG}|"
     for source, text, finished in _log_texts(logs_dir, since, seen_zips):
-        lines: dict[str, dict] = {}
+        reports: dict[str, dict] = {}
         for line in text.splitlines():
-            m = pat.search(line)
-            if not m:
+            i = line.find(tag)
+            if i < 0:
                 continue
-            sid, kind, arg = m.groups()
+            parts = line[i + len(tag):].rstrip().split("|")
+            if len(parts) < 2:
+                continue
+            sid, kind, args = parts[0], parts[1], parts[2:]
             if sid not in pending or sid in found:
                 continue
-            rec = lines.setdefault(sid, {"dead": set(), "end": False, "start": False, "first": None, "last": None,
-                                         "mission_time": None})
+            rec = reports.setdefault(sid, _new_report())
             stamp = _STAMP.match(line)
             if stamp:
                 when = dt.datetime.fromisoformat(stamp.group(1))
                 rec["first"] = rec["first"] or when
                 rec["last"] = when
-            if kind == "DEAD" and arg:
-                rec["dead"].add(arg)
-            elif kind == "END":
-                rec["end"] = True
-                if arg and arg.replace(".", "", 1).isdigit():
-                    rec["mission_time"] = float(arg)
-            elif kind == "START":
-                rec["start"] = True
-        for sid, rec in lines.items():
+            try:
+                if kind == "DEAD" and args:
+                    rec["dead"].add(args[0])
+                elif kind == "START":
+                    rec["start"] = True
+                elif kind == "END":
+                    rec["end"] = True
+                    if args and args[0].replace(".", "", 1).isdigit():
+                        rec["mission_time"] = float(args[0])
+                elif kind == "POS" and len(args) >= 8:
+                    t, x, y, alt, alive, fuel, air = (float(v) for v in args[1:8])
+                    rec["pos"][args[0]] = (t, x, y, alt, int(alive), fuel, bool(int(air)))
+                    rec["last_pos_t"] = max(rec["last_pos_t"], t)
+                elif kind == "LAND" and len(args) >= 3:
+                    rec["lands"][args[0]] = (args[1], float(args[2]))
+                elif kind == "EJECT" and len(args) >= 4:
+                    rec["ejects"].append((args[0], float(args[1]), float(args[2]), float(args[3])))
+                elif kind == "HP" and len(args) >= 3:
+                    rec["hp"][args[0]] = (int(args[1]), int(args[2]))
+            except ValueError:
+                continue  # a malformed line: skip it, keep the rest
+        for sid, rec in reports.items():
             if rec["start"] and (finished or rec["end"] or force_live):
-                flown = rec["mission_time"]
-                if flown is None and rec["first"] and rec["last"]:
+                flown = rec["mission_time"] or rec["last_pos_t"] or None
+                if not flown and rec["first"] and rec["last"]:
                     flown = (rec["last"] - rec["first"]).total_seconds()
-                found[sid] = (rec["dead"], source, flown or 0.0)
+                rec["flown"], rec["source"] = flown or 0.0, source
+                found[sid] = rec
         if finished:
             seen_zips.add(source)
     return found

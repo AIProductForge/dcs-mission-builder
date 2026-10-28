@@ -376,12 +376,13 @@ def _threat(c: Campaign, f: dict, xy, t: float, gone=frozenset()) -> float:
         if s["id"] in gone:
             continue
         d = _dist((s["x"], s["y"]), xy)
+        k = s.get("strength", 1.0)   # a damaged site fights at reduced strength
         if s["role"] == "sam" and d <= 40_000:
-            threat += (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0) * (0.4 if low else 1.0)
+            threat += k * (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0) * (0.4 if low else 1.0)
         elif s["role"] == "ewr" and d <= 80_000:
-            threat += 0.3 * (0.3 if low else 1.0)
+            threat += k * 0.3 * (0.3 if low else 1.0)
         elif s["role"] == "shorad" and d <= 8_000:
-            threat += (1.0 if f["heli"] else 0.5) * (2.0 if low else 1.0)
+            threat += k * (1.0 if f["heli"] else 0.5) * (2.0 if low else 1.0)
     fighters = (1.0 if f["heli"] else 1.5) * len(_enemy_caps(c, f["side"], xy, t, 100_000))
     if is_night(c, t):
         fighters *= 0.6     # fewer fighters find you in the dark
@@ -466,7 +467,8 @@ def _fighter(f: dict) -> bool:
 def _on_station(f: dict, t: float) -> bool:
     return (f["mission"] == "CAP" and f["status"] == "airborne" and f["count"] > 0 and not f["player"]
             and not f.get("flown") and f.get("station", 1e18) <= t <= f.get("off", 0) - 300
-            and not f.get("intercept") and f.get("intercepts", 0) < MAX_INTERCEPTS)
+            and not f.get("intercept") and f.get("intercepts", 0) < MAX_INTERCEPTS
+            and t >= f.get("dcs_until", 0))
 
 
 def air_check(c: Campaign, t: float, rng: random.Random) -> None:
@@ -479,7 +481,8 @@ def air_check(c: Campaign, t: float, rng: random.Random) -> None:
         night = is_night(c, t)
         seen = []
         for g in flights:
-            if g["side"] == cap["side"] or tuple(sorted([cap["id"], g["id"]])) in engaged or g.get("aborted"):
+            if g["side"] == cap["side"] or tuple(sorted([cap["id"], g["id"]])) in engaged or g.get("aborted") \
+                    or t < g.get("dcs_until", 0):
                 continue
             gx, gy, _ = pos_at(g, t)
             d = _dist((cx, cy), (gx, gy))
@@ -588,6 +591,7 @@ def _repair(c: Campaign, site: dict) -> None:
     if site.get("withdrawn") or c.data["fields"].get(site["zone"]) != site["side"]:
         return
     site["alive"] = True
+    site.pop("strength", None)
 
 
 # --- the clock ----------------------------------------------------------------------------
@@ -861,7 +865,7 @@ def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[
             out.append({"id": f["id"], "side": f["side"], "type": f["type"], "count": f["count"], "heli": f["heli"],
                         "mission": f["mission"], "target": f.get("target"), "target_xy": f.get("target_xy"),
                         "loadout": f.get("loadout", ""), "callsign": f["callsign"],
-                        "profile": f.get("profile", "standard"),
+                        "profile": f.get("profile", "standard"), "fuel": f.get("fuel"),
                         # special forces: when the team is on the ground, from mission start
                         "team_delay": round(next((r["t"] for r in f["route"] if r["name"] == "LZ"), at) - now)
                         if f.get("profile") == "sof" else None,
@@ -925,14 +929,41 @@ def ground_sites(c: Campaign, f: dict, ambient: list[dict]) -> list[dict]:
         wanted.pop(f["target"], None)  # the generator builds the player's own target
     chosen = sorted(wanted, key=wanted.get)[:MAX_GROUND_SITES]
     by_id = {s["id"]: s for s in c.data["sites"]}
-    return [{k: by_id[i][k] for k in ("id", "side", "role", "x", "y", "zone")} for i in chosen]
+    return [{**{k: by_id[i][k] for k in ("id", "side", "role", "x", "y", "zone")},
+             "strength": by_id[i].get("strength", 1.0)} for i in chosen]
+
+
+def _route_from(c: Campaign, f: dict, xy, t: float, fuel: float) -> None:
+    """Rebuild an airborne flight's route from where DCS left it at time t: a CAP with time
+    and fuel left goes back to its station and finishes its orbit; everyone else goes home."""
+    alt = f["route"][0]["alt"]
+    speed = SPEED["heli" if f["heli"] else "jet"]
+    base = c.data["field_pos"].get(f["base"]) or xy
+    pts = [{"name": "DCS", "x": round(xy[0]), "y": round(xy[1]), "t": round(t, 1), "alt": alt, "speed": speed}]
+    if f["mission"] == "CAP" and f.get("off", 0) > t + 600 and fuel >= 0.25:
+        station = next(((r["x"], r["y"]) for r in f["route"] if r["name"] == "STATION"), xy)
+        t_back = t + _dist(xy, station) / speed
+        pts.append({"name": "STATION", "x": round(station[0]), "y": round(station[1]), "t": round(t_back, 1),
+                    "alt": alt, "speed": speed})
+        pts += [dict(r) for r in f["route"] if r["t"] > t_back and r["name"] in ("CAP", "STATION")]
+    last = pts[-1]
+    pts.append({"name": "LAND", "x": round(base[0]), "y": round(base[1]),
+                "t": round(last["t"] + _dist((last["x"], last["y"]), base) / speed, 1), "alt": alt, "speed": speed})
+    for r in pts:
+        r.setdefault("ll", c.ll(r["x"], r["y"]))
+    f["route"] = [r for r in f["route"] if r["t"] < t] + pts
+    f["land"] = f["route"][-1]["t"]
+    f.pop("intercept", None)
 
 
 def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float = 0.0,
-                 changes: list[str] | None = None) -> list[str]:
-    """Apply what happened in DCS: aircraft lost on both sides (units named MBF:<flight>:n),
-    then move the war on by the time spent in the mission and log one summary."""
+                 changes: list[str] | None = None, report: dict | None = None) -> list[str]:
+    """Apply what happened in DCS. Aircraft losses (units named MBF:<flight>:n); and, for a
+    campaign flight, DCS's end state: flights that were in the mission landed where DCS says,
+    or carry on from where DCS left them; the engine doesn't roll dice for them inside the
+    window. Then the war moves on by the time spent in the mission and one summary is logged."""
     w = _war(c)
+    report = report or {}
     lost: dict[str, int] = {}
     for u in dead_units:
         if u.startswith("MBF:"):
@@ -952,17 +983,49 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
             else:
                 enemy_lost += n
     rng = random.Random()
-    for s in c.data["sites"]:  # sites destroyed in DCS get repaired like any others
-        if not s["alive"] and not s.get("withdrawn") and "repair_at" not in s:
+    for s in c.data["sites"]:  # sites destroyed or damaged in DCS get repaired like any others
+        if (not s["alive"] and not s.get("withdrawn") or s.get("strength", 1.0) < 1.0) and "repair_at" not in s:
             schedule_repair(s, w["clock"], rng)
     if w["player_flight"] == sortie.get("flight"):
         w["mode"], w["player_flight"] = "running", None
     if not mine:
         return []
-    # The war moves on by the time you spent in the mission (it stays paused).
     began = mine.get("joined_at", mine["takeoff"])
-    if flown and w["clock"] < began + flown:
-        advance(c, began + flown)
+    end_t = began + flown
+    # DCS's end state for every flight that was active in the mission.
+    landed_away, carried_on = [], 0
+    by_id = {f["id"]: f for f in w["flights"]}
+    for fid, (pt, x, y, _alt, alive, fuel, air) in (report.get("pos") or {}).items():
+        f = by_id.get(fid)
+        if not f or f["status"] not in ("airborne", "planned") or f["count"] <= 0:
+            continue
+        f["dcs_until"] = end_t
+        if f["mission"] != "CAP" and not f.get("resolved"):
+            f["resolved"] = True
+            f["result"] = f.get("result") or "flown by the AI in DCS"
+        missing = f["count"] - alive
+        if missing > 0:  # deaths DCS didn't report as events
+            lost_now = _lose(c, f, missing, end_t)
+            if f["side"] == "blue":
+                friendly_lost += lost_now
+            else:
+                enemy_lost += lost_now
+            if f["count"] <= 0:
+                continue
+        landing = next((v for k, v in (report.get("lands") or {}).items() if k.startswith(f"MBF:{fid}:")), None)
+        if landing and not air:
+            place, lt = landing
+            f["status"], f["end"], f["landed_at"] = "landed", began + lt, place
+            if place and place != f["base"]:
+                landed_away.append(f"{f['callsign']} landed at {place}")
+        elif air:
+            f["status"] = "airborne"
+            f["fuel"] = fuel
+            _route_from(c, f, (x, y), end_t, fuel)
+            carried_on += 1
+    # The war moves on by the time you spent in the mission (it stays paused).
+    if flown and w["clock"] < end_t:
+        advance(c, end_t)
     parts = []
     if enemy_lost:
         parts.append(f"{enemy_lost} enemy aircraft shot down")
@@ -972,9 +1035,17 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
     if friendly_lost:
         parts.append(f"{friendly_lost} friendly aircraft lost")
     parts += [x[0].lower() + x[1:].rstrip(".") for x in lost_ground]
+    parts += landed_away
+    if carried_on:
+        parts.append(f"{carried_on} flight{'s carry' if carried_on > 1 else ' carries'} on from where DCS left {'them' if carried_on > 1 else 'it'}")
+    if report.get("ejects"):
+        parts.append(f"{len(report['ejects'])} pilot{'s' if len(report['ejects']) > 1 else ''} ejected")
     summary = (f"{clock_label(c)} · Back from DCS after {round(flown / 60)} min: {mine['callsign']} "
                f"({mine['type']}, {mine['mission']}): " + ("; ".join(parts) if parts else "no losses either side") + ".")
     c.log(summary, mine["mission"], mine["type"], side="blue", t=w["clock"], sortie=sortie["id"], debrief=True)
+    if report.get("ejects"):
+        w.setdefault("ejections", []).extend(
+            {"unit": u, "t": began + t, "x": x, "y": y, "ll": c.ll(x, y)} for u, t, x, y in report["ejects"])
     return [summary]
 
 

@@ -635,6 +635,9 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             if country is B.red:
                 u.skill = B.skill
         loadout, stores = _arm(g, ptype, mission, maintask, a.get("loadout", ""))
+        if a.get("fuel") is not None:  # as DCS left it after the last mission
+            for u in g.units:
+                u.fuel = round(ptype.fuel_max * max(0.05, min(1.0, a["fuel"])))
         for wp in a["route"]:
             p = Point(wp["x"], wp["y"], B.terrain)
             if wp["name"] == "LAND" and a["base"] in B.terrain.airports:
@@ -737,6 +740,8 @@ def add_ground(B: "_Builder", sites: list[dict]) -> None:
                 B.track(g.units[0], site["id"])
             continue
         types = GROUND_UNITS[site["side"]].get(site["role"]) or GROUND_UNITS[site["side"]]["armor"]
+        keep = max(1, round(len(types) * site.get("strength", 1.0)))  # a damaged site: survivors only
+        types = types[:keep]
         g = B.ground(f"{site['side']} {site['role']}", types, pos, country=country,
                      spread=120 if site["role"] == "sam" else 60, site=site["id"])
         B.site_groups.setdefault(site["id"], []).append(g)
