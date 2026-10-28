@@ -81,3 +81,18 @@ details.plan .btn { width: 100%; }
 .campaign .events li.debrief { color: var(--pin); border-left: 2px solid var(--pin); padding-left: 6px; }
 .stores-line { color: var(--panel-text); }
 .stores-line b { color: var(--pin); font-weight: 600; }
+
+details.commander textarea { width: 100%; background: #10120f; color: var(--panel-text); border: 1px solid var(--panel-line);
+  border-radius: 3px; padding: 7px; font: 13px var(--mono); resize: vertical; margin-bottom: 6px; }
+.coa { border: 1px solid var(--panel-line); border-radius: 4px; padding: 8px; margin-top: 8px; background: var(--panel); }
+.coa h3 { font-family: var(--cond); font-size: 17px; text-transform: uppercase; letter-spacing: .03em; margin: 0 0 4px; }
+.coa .odds { font-size: 12px; color: var(--pin); margin: 0 0 4px; }
+.coa p { font-size: 11.5px; line-height: 1.45; margin: 0 0 5px; color: var(--panel-text); }
+.coa p.risk { color: var(--panel-muted); }
+.coa ol { margin: 4px 0 6px 16px; padding: 0; font-size: 11.5px; line-height: 1.4; }
+.coa li { margin-bottom: 4px; }
+.coa li .meta { color: var(--panel-muted); display: block; }
+.coa li.bad { color: #f08a80; }
+.coa .btn { width: 100%; }
+.c-head { font-size: 12px; margin: 10px 0 0; }
+.c-head b { color: var(--pin); }

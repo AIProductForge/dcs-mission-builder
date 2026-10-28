@@ -54,6 +54,9 @@ NEW_GARRISON = 8
 CONSOLIDATE = 24 * 3600   # campaign seconds a captured field can't be retaken
 GARRISON_ROLES = ["armor", "shorad", "sam", "armor", "shorad", "armor", "sam", "armor", "shorad", "armor",
                   "sam", "armor"]
+# Air defence around each blue airfield, on top of its zone (the Liberation baselines give the
+# blue side few SAMs, so red strikes met almost nothing). Also added when blue takes a field.
+AIRBASE_DEFENCE = {"blue": ["sam", "sam", "sam", "ewr"], "red": []}
 LOG_TAG = "MBRESULT"
 
 
@@ -109,7 +112,24 @@ class Campaign:
                     c.add_site(side, role, x, y, zone)
             for n in own:
                 c.garrison(n, side, MIN_ZONE - sum(1 for s in c.data["sites"] if s["zone"] == n))
+        c.ensure_airbase_defence()
         return c
+
+    def ensure_airbase_defence(self) -> bool:
+        """Give each airfield its side's airbase air defence if it doesn't have it yet (new
+        campaigns, older campaign files, fields just captured). Returns True if any was added."""
+        added = False
+        for n, side in self.data["fields"].items():
+            roles = AIRBASE_DEFENCE.get(side) or []
+            if not roles or any(s.get("airbase_defence") and s["zone"] == n and s["side"] == side
+                                for s in self.data["sites"]):
+                continue
+            spots = self.data["garrison_pos"][n][::-1]  # the other end of the field from the garrison
+            for i, role in enumerate(roles):
+                x, y = spots[i % len(spots)]
+                self.add_site(side, role, x, y, n, garrison=True)["airbase_defence"] = True
+            added = True
+        return added
 
     def add_site(self, side: str, role: str, x: float, y: float, zone: str | None, garrison: bool = False) -> dict:
         prefix = "R" if side == "red" else "B"
@@ -213,6 +233,7 @@ class Campaign:
                     s["alive"], s["withdrawn"] = False, True
                     s.pop("repair_at", None)
             self.garrison(n, attacker, NEW_GARRISON)
+            self.ensure_airbase_defence()
             changes.append(f"{'Friendly' if attacker == 'blue' else 'Enemy'} forces captured {n}.")
         if changes and not self.fields_of(other(attacker)):
             changes.append("The campaign is won." if attacker == "blue" else "The campaign is lost.")

@@ -658,6 +658,20 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
                         max_distance=40000 if mission == "SEAD" else 15000,
                         targets=[task.Targets.All.GroundUnits.AirDefence if mission == "SEAD"
                                  else task.Targets.All.GroundUnits]))
+        if a.get("profile") == "sof" and a.get("target_xy"):
+            # The team appears at the landing zone when the helicopter gets there, then moves on the target.
+            lz = next((Point(w["x"], w["y"], B.terrain) for w in a["route"] if w["name"] in ("LZ", "TARGET")), None)
+            if lz is not None:
+                inf = vehicles.Infantry
+                team = B.ground(f"SOF team {a['id']}", [inf.Soldier_M4, inf.Soldier_M4, inf.Soldier_M249,
+                                                         inf.Soldier_M4, inf.Soldier_RPG, inf.JTAC],
+                                lz, country=B.blue, spread=8)
+                team.add_waypoint(Point(a["target_xy"][0], a["target_xy"][1], B.terrain), dcs.point.PointAction.OffRoad)
+                team.late_activation = True
+                t = TriggerOnce(comment=f"SOF team {a['id']} on the ground")
+                t.add_condition(condition.TimeAfter(max(1, a.get("team_delay") or 1)))
+                t.add_action(action.ActivateGroup(team.id))
+                B.m.triggerrules.triggers.append(t)
         if a["delay"] > 0:
             g.late_activation = True
             t = TriggerOnce(comment=f"Launch {a['id']}")

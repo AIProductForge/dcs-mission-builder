@@ -19,6 +19,8 @@ POST /api/war/release {theatre}              give a taken flight back to the AI
 POST /api/war/schedule {theatre, squadron, mission, count, tot, target | station | field}
                                              frag a mission onto the ATO (tot null = ASAP)
 POST /api/war/cancel {theatre, flight}       scrub a friendly flight that hasn't taken off
+POST /api/commander/plan {theatre, order, site}   the air commander's courses of action for an order
+POST /api/commander/execute {theatre, plan, option}  frag the chosen course of action onto the ATO
 GET  /api/current                       the last mission built (for the briefing page)
 POST /api/ping                               keeps the server alive while the page is open
 
@@ -51,6 +53,9 @@ DEFAULT_CONFIG = {
     "liberation_payloads": str(SAVED_GAMES / "dcs_liberation" / "resources" / "customized_payloads"),
     "liberation_campaigns": str(SAVED_GAMES / "dcs_liberation" / "resources" / "campaigns"),
     "dcs_logs": str(SAVED_GAMES / "DCS" / "Logs"),
+    # The air commander's AI: "openrouter" (OPENROUTER_API_KEY) or "anthropic" (ANTHROPIC_API_KEY);
+    # model "" = that provider's default.
+    "commander": {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash"},
     "port": 8765,
     "last": {},
 }
@@ -103,11 +108,14 @@ class State:
                 c.save()
             elif war.add_bombers(c, self.jet_fields(theatre)):  # wars started before the bombers
                 c.save()
+            if c.ensure_airbase_defence():  # campaigns started before airbase air defence
+                c.save()
         generator.SCENARIOS.clear()
         for theatre in self.campaigns:
             self.refresh_view(theatre)
         self.active_theatre: str | None = None   # the map the campaign page is showing; only it runs
         self.seen_logs: set[str] = set()
+        self.plans: dict[str, dict] = {}   # air commander plans by id, until executed or restart
         self.lock = threading.RLock()
         self.current = None          # (spec, mission, briefing) of the last generate
         self.last_ping = time.time()
@@ -325,6 +333,45 @@ class State:
             c.save()
             return self.war.snapshot(c)
 
+    # --- the air commander -------------------------------------------------------------
+
+    def loadout_list(self, type_id: str) -> list[tuple[str, list[str]]]:
+        """Every stored loadout for a type with what it carries, for the commander."""
+        return [(n, self.loadout_for(type_id, "Strike", n)[1]) for n in self.gen.loadouts(type_id)]
+
+    def commander_plan(self, theatre: str, order: str, site_id: str | None = None) -> dict:
+        from . import commander
+        order = (order or "").strip()
+        if not order:
+            raise RuntimeError("Give the commander an order, e.g. 'eliminate the SAM site near Kish'.")
+        with self.lock:
+            c = self.campaigns[theatre]
+            sit = commander.situation(c, self.loadout_list)
+            site = next((s for s in c.data["sites"] if s["id"] == site_id), None) if site_id else None
+        cfg = {**DEFAULT_CONFIG["commander"], **(self.config.get("commander") or {})}
+        plan = commander.ask(order, sit, site, cfg["provider"], cfg["model"])  # slow: don't hold the lock
+        with self.lock:
+            result = commander.evaluate(self.campaigns[theatre], plan)
+            result["order"] = order
+            self.plans[result["id"]] = {"theatre": theatre, **result}
+            return result
+
+    def commander_execute(self, theatre: str, plan_id: str, option: int) -> dict:
+        from . import commander
+        with self.lock:
+            plan = self.plans.get(plan_id)
+            if not plan or plan["theatre"] != theatre:
+                raise RuntimeError("That plan has expired. Ask the commander again.")
+            c = self.campaigns[theatre]
+            opt = plan["options"][int(option)]
+            done, problems = commander.execute(c, opt)
+            if done:
+                c.log(f"{self.war.clock_label(c)} · Commander's plan '{opt['name']}' fragged for '{plan['order']}': "
+                      + ", ".join(f"{f['callsign']} ({f['count']}x {f['type']}, {f['mission']})" for f in done) + ".",
+                      side="blue", t=c.data["war"]["clock"])
+            c.save()
+            return {"fragged": [f["id"] for f in done], "problems": problems, "war": self.war.snapshot(c)}
+
     def release(self, theatre: str) -> dict:
         with self.lock:
             c = self.campaigns[theatre]
@@ -432,6 +479,11 @@ def make_handler(state: State):
                                                           body.get("field"), body.get("loadout", "")))
                 if self.path == "/api/war/cancel":
                     return self._json(200, state.cancel(body["theatre"], body["flight"]))
+                if self.path == "/api/commander/plan":
+                    return self._json(200, state.commander_plan(body["theatre"], body.get("order", ""),
+                                                                body.get("site")))
+                if self.path == "/api/commander/execute":
+                    return self._json(200, state.commander_execute(body["theatre"], body["plan"], body["option"]))
                 if self.path == "/api/war/release":
                     return self._json(200, state.release(body["theatre"]))
                 if self.path == "/api/campaign/reset":

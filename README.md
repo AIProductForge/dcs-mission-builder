@@ -62,7 +62,7 @@ spirit of Falcon BMS's dynamic campaign:
   12 aircraft and get 3 back a day.
 - **ATO.** Every half hour each side plans: a CAP over the front when none is covering it (so a
   CAP that's shot down is replaced quickly), plus a strike, SEAD or CAS against the other side's
-  front-line positions (two attacks an hour for blue, one for red). Squadrons that fly the right task go first;
+  front-line positions (two attacks an hour each). Squadrons that fly the right task go first;
   any strike squadron can take a ground target when they're busy. The map shows each flight
   from takeoff to landing; click one for its route, target and result.
 - **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
@@ -96,12 +96,34 @@ spirit of Falcon BMS's dynamic campaign:
   every flight in it (yours included), and its briefing lists what each friendly flight carries
   and an assessed load for each enemy flight. The war's own strike results don't depend on
   ordnance: they come from type, flight size and the defences.
+- **Airbase air defence.** Each friendly airfield has 3 SAM sites and an early-warning radar on top
+  of its zone (Hawk batteries in DCS), so red's two strikes an hour meet real defences.
 - **Bombers.** Blue also has an F-117A (8), B-1B (6) and B-52H (6) squadron at its rearmost
   airfield with a runway. They are AI-only in DCS, and they fly only missions you frag. The
   F-117 mostly slips past SAMs and fighters; B-1B and B-52 cells hit harder and can take out up
   to two more sites within 2-3 km of the aimpoint, but they are easier to shoot down. To fly
   with them, frag your own flight with a matching time on target (an F-15E two minutes
   behind a B-52 cell, say) and fly that: the bombers are in your mission as AI.
+- **Air commander.** Give an order in your own words ("eliminate the SAM site near Kish",
+  "capture Abu Musa Island", "hit their radar tonight without risking my jets"), optionally after
+  clicking an enemy site on the map. The commander (an AI model, see below) reads the
+  campaign: airfields and what each still needs to fall, enemy sites and the air defence covering
+  them, your squadrons with their loadouts and range, enemy fighters up. It comes back with 3-5
+  courses of action, each a set of frag orders: for example a stealth night strike, a SEAD-escorted
+  package, a low-level attack, a stand-off missile strike, a special forces raid. Every frag is
+  checked against the campaign (squadron, aircraft available, range, loadout, timing) and the odds
+  shown (objective achieved, hit chance per flight, expected losses) come from the war's own model,
+  not from the AI. **Execute** frags that option onto the ATO.
+  - Profiles: *low level* flies under long-range SAM coverage but into the guns; *stand-off*
+    releases from about 110 km and needs stand-off weapons (AGM-86, AGM-154, AGM-84, AGM-65...);
+    *special forces* is a UH-60A squadron (AI only) that lands a team 4 km from the target, which
+    works it for about 40 minutes (in DCS the team appears at the landing zone and moves in).
+  - The AI is a setting in `config.json`: `"commander": {"provider": "openrouter", "model":
+    "deepseek/deepseek-v4.1-flash"}` is the default (key in the `OPENROUTER_API_KEY` environment
+    variable); `{"provider": "anthropic", "model": "claude-opus-5-5"}` uses Claude instead (key in
+    `ANTHROPIC_API_KEY`). Restart Mission Builder after changing it. Each order is one API call; the
+    situation sent is about 6,000 tokens on the Gulf, Nevada and Marianas and 12,000-14,000 on
+    Caucasus and Syria. The page shows the tokens (and OpenRouter's cost) after each answer.
 - **Night.** A time on target between 21:00 and 05:00 counts as night: enemy fighters are less
   effective, and the mission you fly starts at that hour.
 
@@ -143,7 +165,8 @@ Date matters for some systems: the Modern F-15E SIT/JTIDS mod needs a mission da
 - `mission_builder/inventory.py`: owned aircraft, terrains, loadout folders
 - `mission_builder/scenarios.py`: blue/red airfields and land positions from Liberation campaigns
 - `mission_builder/campaign.py`: per-map campaign state, the results script, reading results from dcs.log
-- `mission_builder/war.py`: the air war: clock, squadrons, ATO planning, auto-resolution
+- `mission_builder/war.py`: the air war: clock, squadrons, ATO planning, auto-resolution, plan odds
+- `mission_builder/commander.py`: the air commander (Claude API): situation, courses of action, checks
 - `mission_builder/generator.py`: builds the mission (no UI, can be scripted)
 - `mission_builder/server.py`: local web server and JSON API (127.0.0.1 only)
 - `mission_builder/web/`: the briefing page (`index.html`) and the campaign map (`war.html`)

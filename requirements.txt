@@ -2,3 +2,5 @@
 pydcs @ https://github.com/pydcs/dcs/archive/03dd89faf5121c8df6e8819f5fab1d362c4cfcfd.zip
 pyproj==3.7.2
 certifi==2026.7.22
+# the air commander (Claude API)
+anthropic==2.3.0

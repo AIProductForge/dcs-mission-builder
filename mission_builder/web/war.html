@@ -52,6 +52,17 @@
     <button class="btn ghost danger" id="btn-scrub" type="button">Scrub this flight</button>
   </section>
 
+  <details class="plan commander" id="commander" open>
+    <summary>Air commander</summary>
+    <p class="campaign-line">Give an order in your own words: "eliminate the SAM site near Kish", "capture Abu Musa
+      Island", "hit their radar tonight without risking my jets". The commander comes back with courses of action;
+      pick one to frag it. Click an enemy site on the map to point at it.</p>
+    <textarea id="c-order" rows="3" placeholder="Order to the air commander"></textarea>
+    <p class="campaign-line" id="c-picked"></p>
+    <button class="btn primary" id="btn-ask" type="button">Send to the commander</button>
+    <div id="c-result"></div>
+  </details>
+
   <details class="plan" id="plan">
     <summary>Frag a mission</summary>
     <p class="campaign-line">Add a mission to the ATO: any friendly squadron, any task. Strikes can go deep behind the front;

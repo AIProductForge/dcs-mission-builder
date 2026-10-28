@@ -30,7 +30,7 @@ ALT = {"jet": 6500, "heli": 120}
 RANGE = {"jet": 650_000, "heli": 130_000}
 # Attacks per half-hour plan. Red strikes every other plan (one an hour): the baselines give the
 # blue side far fewer SAMs, and at two an hour red overran blue in 1-3 days in simulation.
-ATTACKS_PER_PLAN = {"blue": 1, "red": 0.5}
+ATTACKS_PER_PLAN = {"blue": 1, "red": 1}
 REPAIR_HOURS = (12, 30)             # a destroyed site is back in action this long after, unless its field falls
 KEEP_FINISHED = 2 * 3600            # finished flights stay on the ATO this long
 
@@ -49,6 +49,18 @@ CALLSIGNS = {"blue": ["ENFIELD", "SPRINGFIELD", "UZI", "COLT", "DODGE", "FORD", 
 BOMBERS = [("F-117A", ["Strike"], 8, 230.0, 7000), ("B-1B", ["Strike"], 6, 250.0, 7500),
            ("B-52H", ["Strike"], 6, 200.0, 10000)]
 BOMBER_RANGE = 3_000_000
+# Special forces: an AI transport helicopter squadron that inserts a team near the target.
+SOF_SQUADRON = ("UH-60A", ["SOF"], 4, 65.0, 60)
+SOF_RANGE = 160_000
+SOF_STANDOFF = 4_000          # the landing zone is this far short of the target
+SOF_ON_GROUND = 40 * 60       # the team works for this long before extraction
+AI_ONLY = {b[0] for b in BOMBERS} | {SOF_SQUADRON[0]}
+# Attack profiles. "low": under the SAM coverage, into the guns. "standoff": weapons released
+# from STANDOFF_RANGE short of the target (needs stand-off weapons). "sof": special forces raid.
+PROFILES = ("standard", "low", "standoff", "sof")
+LOW_ALT = 150
+STANDOFF_RANGE = 110_000
+STANDOFF_WEAPONS = ("AGM-86", "AGM-154", "AGM-84", "AGM-158", "AGM-65", "Kh-", "GBU-39", "GBU-53")
 STEALTH = {"F-117A"}
 # Extra sites a heavy bomber's load can take out around its aimpoint (radius m, max extra sites).
 CARPET = {"B-52H": (3000, 2), "B-1B": (2000, 2)}
@@ -111,8 +123,17 @@ def add_bombers(c: Campaign, jet_fields: set[str]) -> bool:
     w = _war(c)
     have = {sq["type"] for sq in w["squadrons"]}
     fields = [n for n in c.fields_of("blue") if n in jet_fields] or c.fields_of("blue")
-    if not fields or all(b[0] in have for b in BOMBERS):
+    if not fields or all(b[0] in have for b in BOMBERS + [SOF_SQUADRON[:5]]):
         return False
+    if SOF_SQUADRON[0] not in have:  # special forces fly from the field nearest the enemy
+        enemy = [c.data["field_pos"][n] for n in c.fields_of("red")] or [[0, 0]]
+        front = min(c.fields_of("blue"), key=lambda n: min(_dist(c.data["field_pos"][n], e) for e in enemy))
+        type_id, missions, size, speed, alt = SOF_SQUADRON
+        w["squadrons"].append({"id": f"BSOF{len(w['squadrons']) + 1}", "side": "blue", "type": type_id,
+                               "missions": missions, "heli": True, "base": front, "total": size, "size": size,
+                               "manual": True, "speed": speed, "alt": alt})
+    if all(b[0] in have for b in BOMBERS):
+        return True
     enemy = [c.data["field_pos"][n] for n in c.fields_of("red")] or [[0, 0]]
     rear = max(fields, key=lambda n: min(_dist(c.data["field_pos"][n], e) for e in enemy))
     for type_id, missions, size, speed, alt in BOMBERS:
@@ -150,14 +171,33 @@ def _side_step(a, b, metres):
     return [b[0] - (b[1] - a[1]) * metres / d, b[1] + (b[0] - a[0]) * metres / d]
 
 
-def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float) -> tuple[list[dict], dict]:
+def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float,
+           profile: str = "standard") -> tuple[list[dict], dict]:
     kind = "heli" if sq["heli"] else "jet"
     base = c.data["field_pos"][sq["base"]]
     speed, alt = sq.get("speed", SPEED[kind]), sq.get("alt", ALT[kind])
+    if profile == "low" and not sq["heli"]:
+        alt = LOW_ALT
     pts = [("TAKEOFF", base, speed)]
     marks = {}
-    if mission == "CAP":
-        a, b = target, _side_step(base, target, 35_000)
+    waits = {}
+    if mission == "SOF" or profile == "sof":
+        lz = _toward(target, base, SOF_STANDOFF)
+        pts.append(("LZ", lz, speed))
+        pts.append(("TARGET", lz, speed))   # the raid: the team is on the ground near the target
+        waits[len(pts) - 1] = SOF_ON_GROUND / 2
+        marks["tot"] = len(pts) - 1
+        pts.append(("EXTRACT", lz, speed))
+        waits[len(pts) - 1] = SOF_ON_GROUND / 2
+    elif profile == "standoff":
+        launch = _toward(target, base, STANDOFF_RANGE) if _dist(base, target) > STANDOFF_RANGE else base
+        pts.append(("TARGET", launch, speed))  # weapons release point
+        marks["tot"] = len(pts) - 1
+        pts.append(("EGRESS", _side_step(target, launch, 20_000), speed))
+    elif mission == "CAP":
+        a = target
+        # The orbit's other end: across the line from base; a station over the base itself gets a fixed leg.
+        b = _side_step(base, target, 35_000) if _dist(base, target) > 1000 else [a[0] + 25_000, a[1] + 25_000]
         pts.append(("STATION", a, speed))
         marks["station"] = len(pts) - 1
         legs = max(2, int(CAP_ON_STATION * SPEED["orbit"] / _dist(a, b)))
@@ -175,7 +215,7 @@ def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float) -> tuple
     route, t = [], takeoff
     for i, (name, p, leg_speed) in enumerate(pts):
         if i:
-            t += _dist(route[-1]["xy"], p) / leg_speed
+            t += _dist(route[-1]["xy"], p) / leg_speed + waits.get(i, 0)
         route.append({"name": name, "x": round(p[0]), "y": round(p[1]), "t": round(t, 1), "xy": p,
                       "alt": alt, "speed": leg_speed})
     for r in route:
@@ -196,10 +236,10 @@ def available(c: Campaign, sq: dict) -> int:
 
 
 def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float, target_xy, target_site=None,
-                loadout: str = ""):
+                loadout: str = "", profile: str = "standard", commit: bool = True):
     w = _war(c)
     w["seq"] += 1
-    route, marks = _route(c, sq, mission, target_xy, takeoff)
+    route, marks = _route(c, sq, mission, target_xy, takeoff, profile)
     names = CALLSIGNS[sq["side"]]
     f = {"id": f"{sq['side'][0].upper()}{w['seq']}", "side": sq["side"], "squadron": sq["id"],
          "callsign": f"{names[w['seq'] % len(names)]} {1 + (w['seq'] // len(names)) % 9}",
@@ -210,8 +250,12 @@ def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float,
     if target_site:
         site = next(s for s in c.data["sites"] if s["id"] == target_site)
         f["target_name"] = f"{_role_name(site)} near {site['zone']}"
+    f["profile"] = profile
     _arm_flight(f, loadout)
-    w["flights"].append(f)
+    if commit:
+        w["flights"].append(f)
+    else:
+        w["seq"] -= 1
     return f
 
 
@@ -299,16 +343,32 @@ def is_night(c: Campaign, t: float) -> bool:
     return hour >= NIGHT_HOURS[0] or hour < NIGHT_HOURS[1]
 
 
-def _threat(c: Campaign, f: dict, xy, t: float) -> float:
+def _threat(c: Campaign, f: dict, xy, t: float, gone=frozenset()) -> float:
+    """How dangerous it is for this flight over xy at time t. `gone`: site ids to treat as
+    already destroyed (for estimating a sequence of strikes)."""
+    profile = f.get("profile", "standard")
+    if profile == "sof" or f["mission"] == "SOF":
+        threat = 0.0
+        for s in c.alive_sites(other(f["side"])):
+            if s["id"] in gone:
+                continue
+            d = _dist((s["x"], s["y"]), xy)
+            threat += (1.0 if s["role"] == "shorad" and d <= 6_000 else
+                       0.8 if s["role"] == "armor" and d <= 4_000 else
+                       0.3 if s["role"] == "sam" and d <= 15_000 else 0.0)
+        return threat + 0.5 * len(_enemy_caps(c, f["side"], xy, t, 60_000))
+    low = profile == "low"
     threat = 0.0
     for s in c.alive_sites(other(f["side"])):
+        if s["id"] in gone:
+            continue
         d = _dist((s["x"], s["y"]), xy)
         if s["role"] == "sam" and d <= 40_000:
-            threat += (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0)
+            threat += (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0) * (0.4 if low else 1.0)
         elif s["role"] == "ewr" and d <= 80_000:
-            threat += 0.3
+            threat += 0.3 * (0.3 if low else 1.0)
         elif s["role"] == "shorad" and d <= 8_000:
-            threat += 1.0 if f["heli"] else 0.5
+            threat += (1.0 if f["heli"] else 0.5) * (2.0 if low else 1.0)
     fighters = (1.0 if f["heli"] else 1.5) * len(_enemy_caps(c, f["side"], xy, t, 100_000))
     if is_night(c, t):
         fighters *= 0.6     # fewer fighters find you in the dark
@@ -323,16 +383,30 @@ def _who(f: dict) -> str:
     return f"{f['callsign']} ({f['count']}x {f['type']}, {f['mission']})"
 
 
+def strike_odds(c: Campaign, f: dict, t: float, gone=frozenset(), count: int | None = None) -> tuple[float, float]:
+    """(chance the target is destroyed, chance each aircraft is lost) for an attack flight."""
+    count = f["count"] if count is None else count
+    profile = f.get("profile", "standard")
+    if profile == "sof" or f["mission"] == "SOF":
+        threat = _threat(c, f, f["target_xy"], t, gone)
+        return max(0.15, 0.7 - 0.1 * threat), min(0.3, 0.03 + 0.05 * threat)
+    if profile == "standoff":  # danger is at the release point; the weapons do the rest
+        threat = _threat(c, f, f.get("launch_xy") or f["target_xy"], t, gone)
+        pairs = count / 2
+        return 1 - (1 - 0.55) ** pairs, min(0.25, 0.01 + 0.02 * threat)
+    threat = _threat(c, f, f["target_xy"], t, gone)
+    # Odds per pair of aircraft over the target; a heavy bomber carries a pair's worth of bombs or more.
+    pairs = count * (2 if f["type"] in CARPET else 1) / 2
+    return 1 - (1 - max(0.12, 0.65 - 0.07 * threat)) ** pairs, min(0.25, 0.01 + 0.02 * threat)
+
+
 def resolve_attack(c: Campaign, f: dict, rng: random.Random) -> None:
     t = f["tot"]
     f["resolved"] = True
-    threat = _threat(c, f, f["target_xy"], t)
-    p_loss = min(0.25, 0.01 + 0.02 * threat)
+    _, p_loss = strike_odds(c, f, t)
     who = _who(f)
     lost = _lose(c, f, sum(rng.random() < p_loss for _ in range(f["count"])), t)
-    # Odds per pair of aircraft over the target; a heavy bomber carries a pair's worth of bombs or more.
-    pairs = f["count"] * (2 if f["type"] in CARPET else 1) / 2
-    p_hit = 1 - (1 - max(0.12, 0.65 - 0.07 * threat)) ** pairs
+    p_hit, _ = strike_odds(c, f, t)
     site = next((s for s in c.data["sites"] if s["id"] == f["target"]), None)
     parts = []
     if f["count"] and site and site["alive"] and rng.random() < p_hit:
@@ -477,7 +551,8 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
 # --- strikes the player schedules --------------------------------------------------------
 
 def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float | None,
-             site_id: str | None = None, station=None, loadout: str = "") -> dict:
+             site_id: str | None = None, station=None, loadout: str = "", profile: str = "standard",
+             commit: bool = True) -> dict:
     """Frag a mission onto the ATO: this squadron flies `mission` with `count` aircraft.
     Strike/SEAD/CAS go against an enemy site anywhere (front or deep); CAP holds a station
     ([x, y]) for an hour. `tot` is the campaign time on target / on station (None: as soon as
@@ -488,6 +563,12 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
         raise RuntimeError("Pick a friendly squadron that still has aircraft.")
     if mission not in sq["missions"]:
         raise RuntimeError(f"{sq['type']} squadron flies {', '.join(sq['missions'])}, not {mission}.")
+    if profile not in PROFILES:
+        raise RuntimeError(f"Unknown attack profile {profile!r}.")
+    if mission == "SOF":
+        profile = "sof"
+    elif profile == "sof":
+        raise RuntimeError("Special forces raids are flown by the special forces helicopter squadron.")
     count = int(count)
     if count < 1 or count > available(c, sq):
         raise RuntimeError(f"{sq['type']} squadron has {available(c, sq)} aircraft available.")
@@ -503,17 +584,26 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
             raise RuntimeError("Pick an enemy site that is still standing.")
         target = (site["x"], site["y"])
         where = None
-    reach = BOMBER_RANGE if sq.get("manual") else RANGE["heli" if sq["heli"] else "jet"]
+    reach = SOF_RANGE if mission == "SOF" else BOMBER_RANGE if sq.get("manual") else RANGE["heli" if sq["heli"] else "jet"]
     if _dist(c.data["field_pos"][sq["base"]], target) > reach:
         raise RuntimeError(f"That's out of range for {sq['type']} from {sq['base']}.")
-    f = _new_flight(c, sq, mission, count, w["clock"] + 10 * 60, target, site["id"] if site else None, loadout)
+    f = _new_flight(c, sq, mission, count, w["clock"] + 10 * 60, target, site["id"] if site else None, loadout,
+                    profile, commit)
+    if profile == "standoff":
+        if not any(any(k in st for k in STANDOFF_WEAPONS) for st in f.get("stores", [])):
+            if commit:
+                w["flights"].remove(f)
+            raise RuntimeError(f"A stand-off attack needs stand-off weapons; {sq['type']} loadout "
+                               f"{f.get('loadout')!r} carries {', '.join(f.get('stores', [])) or 'none'}.")
+        f["launch_xy"] = [f["route"][[r["name"] for r in f["route"]].index("TARGET")][k] for k in ("x", "y")]
     if where:
         f["target_name"] = where
     key = "station" if mission == "CAP" else "tot"
     if tot is not None:  # shift the whole route so it arrives on time
         shift = float(tot) - f[key]
         if shift < 0:
-            w["flights"].remove(f)
+            if commit:
+                w["flights"].remove(f)
             raise RuntimeError(f"Too soon: the earliest time {'on station' if key == 'station' else 'on target'} "
                                f"is {clock_label(c, f[key])}.")
         for r in f["route"]:
@@ -523,6 +613,8 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
                 f[k] = round(f[k] + shift, 1)
     f["scheduled"] = True
     f["night"] = is_night(c, f[key])
+    if not commit:
+        return f
     c.log(f"{clock_label(c)} · Fragged {f['callsign']} ({count}x {sq['type']}, {mission}) "
           f"{'holding' if mission == 'CAP' else 'against'} {f['target_name']}, "
           f"{'on station' if key == 'station' else 'on target'} {clock_label(c, f[key])}"
@@ -544,6 +636,45 @@ def _station_name(c: Campaign, xy) -> str:
     return f"station {round(d / 1852)} nm {points[round(hdg / 45) % 8]} of {n}"
 
 
+def estimate(c: Campaign, flights: list[dict], objective: dict | None = None, trials: int = 400,
+             rng: random.Random | None = None) -> dict:
+    """Odds for a package of (uncommitted) flights, flown in time-on-target order: each strike
+    that lands makes the ones after it safer. objective: {"sites": [ids]} (destroy them all) or
+    {"field": name} (capture it). Returns per-flight hit and loss rates and the objective's odds."""
+    rng = rng or random.Random(1)
+    order = sorted((f for f in flights if f["mission"] != "CAP"), key=lambda f: f["tot"])
+    hits = {f["id"]: 0 for f in order}
+    losses = {f["id"]: 0.0 for f in order}
+    success = 0
+    zone = None
+    if objective and objective.get("field"):
+        zone = objective["field"]
+        status = c.zone_status(zone)
+        zone_sites = {s["id"]: s for s in c.data["sites"] if s["zone"] == zone and s["side"] == c.data["fields"][zone]}
+    for _ in range(trials):
+        gone: set[str] = set()
+        for f in order:
+            p_hit, p_loss = strike_odds(c, f, f["tot"], frozenset(gone))
+            lost = sum(rng.random() < p_loss for _ in range(f["count"]))
+            losses[f["id"]] += lost
+            if lost < f["count"]:
+                p_hit, _ = strike_odds(c, f, f["tot"], frozenset(gone), f["count"] - lost)
+                if f.get("target") and f["target"] not in gone and rng.random() < p_hit:
+                    gone.add(f["target"])
+                    hits[f["id"]] += 1
+        if objective and objective.get("sites"):
+            success += all(sid in gone for sid in objective["sites"])
+        elif zone:
+            killed = [zone_sites[i] for i in gone if i in zone_sites and zone_sites[i]["alive"]]
+            ad = sum(1 for s in killed if s["role"] in ("sam", "ewr"))
+            success += (status["destroyed"] + len(killed) >= status["needed"]
+                        and status["ad_destroyed"] + ad >= status["ad_needed"])
+    return {"flights": {fid: {"hit": hits[fid] / trials, "losses": losses[fid] / trials} for fid in hits},
+            "objective": success / trials if objective else None,
+            "expected_losses": sum(losses.values()) / trials,
+            "trials": trials}
+
+
 def cancel(c: Campaign, flight_id: str) -> None:
     w = _war(c)
     f = next((x for x in w["flights"] if x["id"] == flight_id), None)
@@ -562,7 +693,7 @@ def take_flight(c: Campaign, flight_id: str) -> dict:
     f = next((x for x in w["flights"] if x["id"] == flight_id), None)
     if not f or f["side"] != "blue" or f["status"] not in ("planned", "airborne") or not f["count"]:
         raise RuntimeError("That flight can't be flown: pick a planned or airborne friendly flight.")
-    if f["type"] in {b[0] for b in BOMBERS}:
+    if f["type"] in AI_ONLY:
         raise RuntimeError(f"The {f['type']} is AI-only in DCS. Fly an escort or SEAD flight alongside it instead.")
     if f["status"] == "airborne":
         if w["clock"] >= f["land"] - 300:
@@ -613,6 +744,10 @@ def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[
             out.append({"id": f["id"], "side": f["side"], "type": f["type"], "count": f["count"], "heli": f["heli"],
                         "mission": f["mission"], "target": f.get("target"), "target_xy": f.get("target_xy"),
                         "loadout": f.get("loadout", ""), "callsign": f["callsign"],
+                        "profile": f.get("profile", "standard"),
+                        # special forces: when the team is on the ground, from mission start
+                        "team_delay": round(next((r["t"] for r in f["route"] if r["name"] == "LZ"), at) - now)
+                        if f.get("profile") == "sof" else None,
                         "x": x, "y": y, "alt": f["route"][0]["alt"],
                         "speed": f["route"][0]["speed"], "route": rest, "delay": round(at - now),
                         "base": f["base"]})
@@ -743,7 +878,7 @@ def snapshot(c: Campaign) -> dict:
         "sites": [{"id": s["id"], "side": s["side"], "role": s["role"], "ll": s["ll"], "alive": s["alive"],
                    "zone": s["zone"]} for s in c.data["sites"]],
         "squadrons": [dict(sq, available=available(c, sq)) for sq in w["squadrons"]],
-        "ai_only": [b[0] for b in BOMBERS],
+        "ai_only": sorted(AI_ONLY),
         "flights": [{k: v for k, v in f.items() if k != "route"} |
                     {"route": [{"name": r["name"], "ll": r["ll"], "t": r["t"]} for r in f["route"]]}
                     for f in w["flights"]],

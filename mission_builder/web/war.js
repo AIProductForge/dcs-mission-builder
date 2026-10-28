@@ -282,6 +282,96 @@ function renderClock() {
     "Fly it in DCS: the war stays paused and resumes from takeoff once the results are read from dcs.log.";
 }
 
+// ---------- air commander ----------
+const PROFILE = { standard: "", low: "low level", standoff: "stand-off", sof: "special forces" };
+
+async function askCommander() {
+  const order = $("c-order").value.trim();
+  if (!order || S.asking) return;
+  S.asking = true;
+  $("btn-ask").disabled = true;
+  const box = $("c-result");
+  box.innerHTML = '<p class="campaign-line">The commander is planning. This usually takes 20 to 60 seconds…</p>';
+  try {
+    const plan = await api("/api/commander/plan", { theatre: S.theatre, order, site: S.pickedSite ? S.pickedSite.id : null });
+    S.plan = plan;
+    renderPlanResult(plan);
+  } catch (e) {
+    box.innerHTML = "";
+    setStatus(e.message, "err");
+  }
+  S.asking = false;
+  $("btn-ask").disabled = false;
+}
+
+function pct(x) { return x === null || x === undefined ? "—" : `${Math.round(x * 100)}%`; }
+
+function renderPlanResult(plan) {
+  const box = $("c-result");
+  box.innerHTML = "";
+  const head = document.createElement("p");
+  head.className = "c-head";
+  head.innerHTML = "<b>Understood:</b> <span></span>";
+  head.querySelector("span").textContent = plan.understanding + (plan.clarification ? ` ${plan.clarification}` : "");
+  box.appendChild(head);
+  plan.options.forEach((opt, i) => {
+    const card = document.createElement("div");
+    card.className = "coa";
+    card.innerHTML = `<h3></h3><p class="odds"></p><p class="concept"></p><p class="risk"></p><ol></ol>`;
+    card.querySelector("h3").textContent = `${i + 1}. ${opt.name}`;
+    const odds = [];
+    if (opt.objective !== null) odds.push(`Objective achieved ${pct(opt.objective)}`);
+    if (opt.expected_losses !== null) odds.push(`expected losses ${opt.expected_losses} aircraft`);
+    card.querySelector(".odds").textContent = odds.join(" · ") || "No odds for this option";
+    card.querySelector(".concept").textContent = opt.concept;
+    card.querySelector(".risk").textContent = `Risk: ${opt.risk}`;
+    const ol = card.querySelector("ol");
+    for (const f of opt.frags) {
+      const li = document.createElement("li");
+      if (f.error) {
+        li.className = "bad";
+        li.textContent = `${f.count}× ${f.type} ${f.mission}: can't be fragged (${f.error}).`;
+      } else {
+        const prof = PROFILE[f.profile] ? `, ${PROFILE[f.profile]}` : "";
+        li.innerHTML = "<span class='what'></span><span class='meta'></span>";
+        li.querySelector(".what").textContent = `${f.count}× ${f.type} ${f.mission}${prof}: ${f.target || f.purpose}` +
+          (f.flyable ? " ✈ flyable" : "");
+        li.querySelector(".meta").textContent = `T/O ${f.takeoff}, on target ${f.on_target.split(" ").pop()}` +
+          (f.night ? " (night)" : "") + (f.hit !== undefined ? ` · hit ${pct(f.hit)}, losses ${f.losses}` : "") +
+          (f.stores && f.stores.length ? ` · ${f.stores.slice(0, 3).join(", ")}` : "") + ` · ${f.purpose}`;
+      }
+      ol.appendChild(li);
+    }
+    const btn = document.createElement("button");
+    btn.className = "btn primary";
+    btn.type = "button";
+    btn.textContent = opt.valid ? `Execute option ${i + 1} (${opt.valid} frag${opt.valid > 1 ? "s" : ""})` : "Nothing to frag";
+    btn.disabled = !opt.valid;
+    btn.addEventListener("click", () => executeOption(i));
+    card.appendChild(btn);
+    box.appendChild(card);
+  });
+  if (plan.usage) {
+    const u = document.createElement("p");
+    u.className = "campaign-line";
+    u.textContent = `${plan.usage.model}: ${plan.usage.input_tokens} tokens in, ${plan.usage.output_tokens} out.`;
+    box.appendChild(u);
+  }
+}
+
+async function executeOption(i) {
+  if (!S.plan) return;  // already executed (double click)
+  try {
+    const res = await api("/api/commander/execute", { theatre: S.theatre, plan: S.plan.id, option: i });
+    take(res.war, false);
+    const msg = `Fragged ${res.fragged.length} flight${res.fragged.length === 1 ? "" : "s"} from "${S.plan.options[i].name}".` +
+                (res.problems.length ? ` Not fragged: ${res.problems.join("; ")}` : "");
+    setStatus(msg, res.problems.length ? "err" : "ok");
+    $("c-result").innerHTML = "";
+    S.plan = null;
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
 // ---------- fragging missions ----------
 function drawCapPoint() {
   if (!S.map) return;
@@ -440,6 +530,12 @@ function planTot() {
 
 function pickTarget(site) {
   if (site.side !== "red" || !site.alive) return;
+  S.pickedSite = site;
+  $("c-picked").textContent = `Pointing at: ${ROLE[site.role] || site.role} near ${site.zone} (${site.id}).`;
+  if ($("commander").open && !$("plan").open) {
+    setStatus(`Selected ${ROLE[site.role] || site.role} near ${site.zone} for the commander.`);
+    return;
+  }
   if (!$("plan").open) { $("plan").open = true; renderPlan(); }
   if ($("p-mission").value === "CAP") return;  // a map click places the CAP station instead
   $("p-target").value = site.id;
@@ -585,6 +681,8 @@ async function boot() {
     catch (e) { setStatus(e.message, "err"); }
   });
   $("btn-schedule").addEventListener("click", fragMission);
+  $("btn-ask").addEventListener("click", askCommander);
+  $("c-order").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) askCommander(); });
   $("p-squadron").addEventListener("change", () => { renderMissions(); planNote(); });
   $("p-mission").addEventListener("change", () => { renderMissions(); planNote(); });
   $("p-station").addEventListener("change", () => { drawCapPoint(); planNote(); });
