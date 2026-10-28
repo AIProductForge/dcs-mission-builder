@@ -144,9 +144,17 @@ spirit of Falcon BMS's dynamic campaign:
     Caucasus and Syria; DeepSeek answers run up to about 19,000 tokens with its reasoning (about $0.002-0.013 an order in tests). The page shows the tokens, reasoning and OpenRouter cost after each answer.
 - **Night.** A time on target between 21:00 and 05:00 counts as night: enemy fighters are less
   effective, and the mission you fly starts at that hour.
+- **Red airbase air defence.** Each red airfield gets defences by its importance
+  (`systems.RED_AIRBASE_DEFENCE` and `FIELD_TIER`): a major base (on the Gulf: Bandar Abbas and
+  Shiraz) an SA-10 (S-300PS, 120 km), an SA-11, two SA-15 and a 55G6 radar (400 km); a main base
+  (Kerman, Kish, and every red field on other maps) an SA-11, an SA-15 and a 1L13; a minor one
+  (Qeshm, Abu Musa) an SA-6 and an SA-8. In the war's odds an SA-10 site counts as two SA-6
+  sites, an SA-11 as 1.4, an SA-15 as 0.8 (a judgement; the ranges are DCS data). There is no
+  S-400 in DCS's own units (pydcs lists none), so the S-300PS is the top Russian system. A field red
+  captures gets its tier's defences too.
 - **DCS ranges.** Every campaign site is a DCS system (`mission_builder/systems.py`): red SAMs are
-  SA-6, red short-range sites ZSU-23-4 + SA-13, red radars 1L13; blue has Hawk, Vulcan + Avenger
-  and Hawk CWAR. The war's odds, the map's rings, the briefing's threat rings and the air
+  SA-6 unless they're airbase defence (above), red short-range sites ZSU-23-4 + SA-13, red radars
+  1L13; blue has Hawk, Vulcan + Avenger and Hawk CWAR. The war's odds, the map's rings, the briefing's threat rings and the air
   commander all use each system's ranges from DCS's unit data (via pydcs): SA-6 engages out to
   25 km (radar 70 km), Hawk 45 km (90 km), ZSU-23-4 + SA-13 5 km, Vulcan + Avenger 4.5 km, the
   1L13 sees 300 km and the Hawk CWAR 70 km. A damaged site counts what its surviving units reach:

@@ -18,7 +18,7 @@ import math
 import random
 
 from .campaign import Campaign, _dist, _role_name, other
-from .systems import site_ranges, system_for
+from .systems import WEIGHT, site_ranges, system_for
 
 START = "2010-06-01T06:00:00"      # local time on the map when a war begins
 SQUADRON_SIZE = 12
@@ -530,7 +530,7 @@ def _threat(c: Campaign, f: dict, xy, t: float, gone=frozenset()) -> float:
         k = s.get("strength", 1.0)   # a damaged site fights at reduced strength
         reach, see = site_ranges(s)   # its DCS ranges (systems.py)
         if s["role"] == "sam" and reach and d <= reach:
-            threat += k * (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0) * (0.4 if low else 1.0)
+            threat += k * WEIGHT.get(s.get("system"), 1.0) * (0.5 if f["mission"] == "SEAD" else 1.0) * (0.6 if f["heli"] else 1.0) * (0.4 if low else 1.0)
         elif s["role"] == "ewr" and d <= see:
             threat += k * 0.3 * (0.3 if low else 1.0)
         elif s["role"] == "shorad" and reach and d <= reach:

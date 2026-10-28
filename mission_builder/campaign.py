@@ -121,20 +121,30 @@ class Campaign:
         campaigns, older campaign files, fields just captured). Returns True if any was added."""
         added = False
         for n, side in self.data["fields"].items():
-            roles = AIRBASE_DEFENCE.get(side) or []
-            if not roles or any(s.get("airbase_defence") and s["zone"] == n and s["side"] == side
-                                for s in self.data["sites"]):
+            if side == "red":   # by the field's importance: systems.RED_AIRBASE_DEFENCE
+                tier = systems.FIELD_TIER.get(self.data["theatre"], {}).get(n, "main")
+                plan = [(systems.ROLE[sy], sy) for sy in systems.RED_AIRBASE_DEFENCE[tier]]
+            else:
+                plan = [(role, None) for role in AIRBASE_DEFENCE.get(side) or []]
+            if not plan or any(s.get("airbase_defence") and s["zone"] == n and s["side"] == side
+                               for s in self.data["sites"]):
                 continue
             spots = self.data["garrison_pos"][n][::-1]  # the other end of the field from the garrison
-            for i, role in enumerate(roles):
+            for i, (role, system) in enumerate(plan):
                 x, y = spots[i % len(spots)]
-                self.add_site(side, role, x, y, n, garrison=True)["airbase_defence"] = True
+                site = self.add_site(side, role, x, y, n, garrison=True)
+                site["airbase_defence"] = True
+                if system:
+                    site["system"] = system
             added = True
         return added
 
     def add_site(self, side: str, role: str, x: float, y: float, zone: str | None, garrison: bool = False) -> dict:
         prefix = "R" if side == "red" else "B"
+        taken = {s["id"] for s in self.data["sites"]}
         n = sum(1 for s in self.data["sites"] if s["side"] == side) + 1
+        while f"{prefix}{n}" in taken:
+            n += 1
         site = {"id": f"{prefix}{n}", "side": side, "role": role, "x": x, "y": y, "ll": self.ll(x, y),
                 "zone": zone, "alive": True}
         system = systems.system_for(side, role)

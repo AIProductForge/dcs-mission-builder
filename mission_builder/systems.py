@@ -16,7 +16,14 @@ AD, _A = vehicles.AirDefence, vehicles.Armor
 SYSTEMS: dict[str, list] = {
     "SA-6": [AD.Kub_1S91_str, AD.Kub_2P25_ln, AD.Kub_2P25_ln, AD.Kub_2P25_ln],
     "Hawk": [AD.Hawk_sr, AD.Hawk_tr, AD.Hawk_ln, AD.Hawk_ln],
+    "SA-10": [AD.S_300PS_64H6E_sr, AD.S_300PS_40B6M_tr, AD.S_300PS_5P85C_ln, AD.S_300PS_54K6_cp,
+              AD.S_300PS_5P85C_ln, AD.S_300PS_5P85D_ln, AD.S_300PS_5P85D_ln],
+    "SA-11": [AD.SA_11_Buk_SR_9S18M1, AD.SA_11_Buk_LN_9A310M1, AD.SA_11_Buk_CC_9S470M1,
+              AD.SA_11_Buk_LN_9A310M1, AD.SA_11_Buk_LN_9A310M1],
+    "SA-15": [AD.Tor_9A331, AD.Tor_9A331],
+    "SA-8": [AD.Osa_9A33_ln, AD.Osa_9A33_ln],
     "1L13 EWR": [AD.X_1L13_EWR],
+    "55G6 EWR": [AD.X_55G6_EWR],
     "Hawk CWAR": [AD.Hawk_cwar],
     "ZSU-23-4 / SA-13": [AD.ZSU_23_4_Shilka, AD.Strela_10M3],
     "Vulcan / Avenger": [AD.Vulcan, AD.M1097_Avenger],
@@ -34,7 +41,23 @@ DEFAULT = {
              "missile": "MLRS battery"},
 }
 
-ROLE = {name: role for side in DEFAULT.values() for role, name in side.items()}
+ROLE = {**{name: role for side in DEFAULT.values() for role, name in side.items()},
+        "SA-10": "sam", "SA-11": "sam", "SA-15": "sam", "SA-8": "sam", "55G6 EWR": "ewr"}
+# How much a SAM site of this system counts in the war's odds, against an SA-6 at 1.0: more
+# launchers, longer reach, harder to suppress. A judgement, not DCS data (the ranges are).
+WEIGHT = {"SA-10": 2.0, "SA-11": 1.4, "SA-6": 1.0, "Hawk": 1.0, "SA-15": 0.8, "SA-8": 0.7}
+
+# Red airbase air defence by the airfield's importance (blue's is in campaign.AIRBASE_DEFENCE).
+RED_AIRBASE_DEFENCE = {
+    "major": ["SA-10", "SA-11", "SA-15", "SA-15", "55G6 EWR"],
+    "main": ["SA-11", "SA-15", "1L13 EWR"],
+    "minor": ["SA-6", "SA-8"],
+}
+# Fields named here get that tier; other red fields get "main" (or "minor" with no runway).
+FIELD_TIER = {
+    "PersianGulf": {"Bandar Abbas Intl": "major", "Shiraz Intl": "major", "Kerman": "main",
+                    "Kish Intl": "main", "Qeshm Island": "minor", "Abu Musa Island": "minor"},
+}
 
 
 def system_for(side: str, role: str) -> str | None:
