@@ -64,7 +64,10 @@ spirit of Falcon BMS's dynamic campaign:
   CAP that's shot down is replaced quickly), plus a strike, SEAD or CAS against the other side's
   front-line positions (two attacks an hour each). Squadrons that fly the right task go first;
   any strike squadron can take a ground target when they're busy. The map shows each flight
-  from takeoff to landing; click one for its route, target and result.
+  from takeoff to landing; click one for its route, target and result. **Coverage rings** (top right
+  of the map) show the air defence of either side: SAMs (40 km), short-range air defence (8 km) and
+  early-warning radar (80 km). The radii are the ranges the war's odds use, not each system's exact
+  DCS range.
 - **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
   odds depend on the SAMs, short-range air defence and radar around the target and on enemy
   CAP nearby. CAPs that meet fight it out.

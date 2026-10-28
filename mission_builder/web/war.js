@@ -6,6 +6,10 @@
 const $ = (id) => document.getElementById(id);
 const S = { theatre: null, snap: null, at: 0, selected: null, map: null, layers: {}, markers: new Map(), busy: false };
 const COLORS = { blue: "#1f4e8c", red: "#b3261e", dead: "#8a8a80" };
+// Coverage ring radii: the ranges the campaign's odds model uses (war._threat), in metres.
+const RINGS = { sam: 40000, shorad: 8000, ewr: 80000 };
+const RING_STYLE = { sam: { weight: 1.2, fillOpacity: 0.05 }, shorad: { weight: 1, dashArray: "4 4", fillOpacity: 0.07 },
+                     ewr: { weight: 1, dashArray: "2 6", fillOpacity: 0 } };
 const ROLE = { sam: "SAM site", ewr: "Early-warning radar", shorad: "Short-range air defence", armor: "Armour",
                missile: "Missile battery", structure: "Installation", farp: "Helicopter base" };
 
@@ -74,7 +78,8 @@ function initMap() {
   L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
     maxZoom: 13, attribution: 'Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | style © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
   }).addTo(S.map);
-  for (const k of ["sites", "fields", "route", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
+  S.ringRenderer = L.canvas({ padding: 0.5 });  // hundreds of circles: canvas keeps panning smooth
+  for (const k of ["rings", "sites", "fields", "route", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
   // With the frag form open on a CAP, a click on the map sets the station.
   S.map.on("click", (e) => {
     if (!$("plan").open || $("p-mission").value !== "CAP") return;
@@ -94,9 +99,40 @@ function planeIcon(f, hdg, selected) {
     `<span class="flight-tag">${tag}</span></div>` });
 }
 
+function ringChoice() {
+  const on = {};
+  for (const box of document.querySelectorAll("[data-ring]")) on[box.dataset.ring] = box.checked;
+  return on;
+}
+
+function drawRings() {
+  if (!S.map || !S.snap) return;
+  S.layers.rings.clearLayers();
+  const on = ringChoice();
+  for (const site of S.snap.sites) {
+    if (!site.alive || !RINGS[site.role] || !on[site.side] || !on[site.role]) continue;
+    L.circle(site.ll, { radius: RINGS[site.role], color: COLORS[site.side], fillColor: COLORS[site.side],
+                        interactive: false, renderer: S.ringRenderer, ...RING_STYLE[site.role] })
+      .addTo(S.layers.rings);
+  }
+}
+
+function setupRings() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("war-rings") || "null"); } catch (e) { /* storage blocked */ }
+  for (const box of document.querySelectorAll("[data-ring]")) {
+    if (saved && box.dataset.ring in saved) box.checked = saved[box.dataset.ring];
+    box.addEventListener("change", () => {
+      try { localStorage.setItem("war-rings", JSON.stringify(ringChoice())); } catch (e) { /* storage blocked */ }
+      drawRings();
+    });
+  }
+}
+
 function drawStatic() {
   if (!S.map) return;
   const s = S.snap;
+  drawRings();
   S.layers.sites.clearLayers();
   S.layers.fields.clearLayers();
   for (const site of s.sites) {
@@ -656,6 +692,7 @@ async function fly() {
 
 async function boot() {
   initMap();
+  setupRings();
   const o = await api("/api/options");
   const theatres = Object.keys(o.campaigns);
   const sel = $("theatre");
