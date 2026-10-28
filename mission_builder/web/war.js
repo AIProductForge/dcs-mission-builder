@@ -89,7 +89,7 @@ function initMap() {
   // Leaflet measures its container once; re-measure when the layout changes it (fonts, panels, resize).
   new ResizeObserver(() => S.map.invalidateSize()).observe($("map"));
   S.ringRenderer = L.canvas({ padding: 0.5 });  // hundreds of circles: canvas keeps panning smooth
-  for (const k of ["rings", "sites", "fields", "route", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
+  for (const k of ["rings", "sites", "fields", "route", "battles", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
   // With the frag form open on a CAP, a click on the map sets the station.
   S.map.on("click", (e) => {
     if (!$("plan").open || $("p-mission").value !== "CAP") return;
@@ -342,6 +342,7 @@ function flightTask(f) {
 
 function flightStatus(f, t) {
   if (f.player) return ["player", "You"];
+  if (f.intercept && f.status === "airborne") return ["airborne", `Intercepting ${f.intercept.callsign}`];
   if (f.flown) return ["", "Flown"];
   if (f.status === "planned" && t < f.takeoff) return ["", "Planned"];
   if (f.status === "lost") return ["lost", "Lost"];
@@ -753,8 +754,30 @@ async function fragMission() {
   } catch (e) { setStatus(e.message, "err"); }
 }
 
+// Air battles: a burst where each one happened, fading over BATTLE_SHOW campaign seconds.
+const BATTLE_SHOW = 20 * 60;
+
+function drawBattles() {
+  if (!S.map || !S.snap) return;
+  const t = clockNow();
+  const key = (S.snap.battles || []).length + "|" + Math.floor(t / 60);
+  if (S.battleKey === key) return;
+  S.battleKey = key;
+  S.layers.battles.clearLayers();
+  for (const b of S.snap.battles || []) {
+    const age = t - b.t;
+    if (age < 0 || age > BATTLE_SHOW) continue;
+    const fade = 1 - age / BATTLE_SHOW;
+    L.marker(b.ll, { keyboard: false, zIndexOffset: 500, icon: L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+      html: `<div class="battle${b.kills ? " kill" : ""}" style="opacity:${(0.35 + 0.65 * fade).toFixed(2)}">✸</div>` }) })
+      .bindTooltip(`${label(b.t)}: ${b.text}`, { className: "map-tip" })
+      .addTo(S.layers.battles);
+  }
+}
+
 function render(full) {
   renderClock();
+  drawBattles();
   if (!$("plan").open || full) renderPlan();
   renderAto();
   renderSelected();
@@ -896,7 +919,7 @@ async function boot() {
   setInterval(() => refresh(false), 2000);
   setInterval(() => api("/api/ping", {}).catch(() => setStatus("Mission Builder has stopped. Relaunch it to continue.", "err")), 15000);
   api("/api/ping", {}).catch(() => {});
-  setInterval(() => { if (running()) { drawFlights(); } }, 100);
+  setInterval(() => { if (running()) { drawFlights(); drawBattles(); } }, 100);
   setInterval(() => { if (running()) { renderAto(); renderSelected(); } }, 1000);
 }
 

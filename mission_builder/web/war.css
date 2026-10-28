@@ -110,3 +110,8 @@ details.commander textarea { width: 100%; background: #10120f; color: var(--pane
 .profile-head span:first-child { font-family: var(--cond); text-transform: uppercase; letter-spacing: .1em; color: var(--accent); }
 #profile-note.warn { color: #f08a80; }
 #profile-canvas { width: 100%; height: auto; background: #10120f; border: 1px solid var(--panel-line); border-radius: 3px; display: block; }
+
+.battle { font-size: 20px; line-height: 22px; text-align: center; color: #f2a93b;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 6px #f2a93b; pointer-events: auto; }
+.battle.kill { color: #e0574d; text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 8px #e0574d; }
+.map-legend i.battle-key { color: #f2a93b; font-style: normal; }

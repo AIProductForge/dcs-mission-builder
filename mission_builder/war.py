@@ -25,6 +25,19 @@ REPLENISH_PER_DAY = 3
 PLAN_EVERY = 1800                   # the ATO is planned every half hour (a lost CAP is soon replaced)...
 PLAN_AHEAD = (15 * 60, 45 * 60)     # ...for takeoffs in this window from the planning time
 CAP_ON_STATION = 3600
+# Intercepts: every AIR_CHECK seconds each CAP on station looks for enemy flights within DETECT
+# metres (chance P_DETECT, less at night and far less against stealth) and flies out to meet
+# one at PURSUIT m/s, no further than CHASE from its station; then it returns to its station.
+AIR_CHECK = 300
+DETECT = 80_000
+P_DETECT = {"day": 0.5, "night": 0.35, "stealth": 0.15}   # per check
+PURSUIT = 280.0
+CHASE = 150_000
+DOGFIGHT_KILL = 0.25         # per aircraft, scaled by the other side's share of the ratings
+STRIKER_DEFENCE = 0.4        # a strike or transport flight's air-to-air rating
+P_ABORT = 0.4                # survivors of an intercepted strike that jettison and go home
+BATTLE_MEMORY = 6 * 3600     # how long battle markers are kept
+MAX_INTERCEPTS = 2           # per CAP sortie: then it's out of missiles and just holds the station
 SPEED = {"jet": 230.0, "heli": 60.0, "orbit": 180.0}   # m/s
 ALT = {"jet": 6500, "heli": 120}
 RANGE = {"jet": 650_000, "heli": 130_000}
@@ -403,6 +416,11 @@ def strike_odds(c: Campaign, f: dict, t: float, gone=frozenset(), count: int | N
 def resolve_attack(c: Campaign, f: dict, rng: random.Random) -> None:
     t = f["tot"]
     f["resolved"] = True
+    if f.get("aborted"):
+        f["result"] = "aborted after being intercepted"
+        c.log(f"{clock_label(c, t)} · {_who(f)} aborted the attack after being intercepted.", f["mission"],
+              f["type"], side=f["side"], t=t)
+        return
     _, p_loss = strike_odds(c, f, t)
     who = _who(f)
     lost = _lose(c, f, sum(rng.random() < p_loss for _ in range(f["count"])), t)
@@ -437,21 +455,111 @@ def resolve_attack(c: Campaign, f: dict, rng: random.Random) -> None:
 
 
 def resolve_station(c: Campaign, f: dict, rng: random.Random) -> None:
-    """A CAP arriving on station fights any enemy CAP in the area."""
-    t = f["station"]
+    """A CAP arriving on station: from now on it hunts (see air_check)."""
     f["resolved"] = True
+
+
+def _fighter(f: dict) -> bool:
+    return f["mission"] == "CAP"
+
+
+def _on_station(f: dict, t: float) -> bool:
+    return (f["mission"] == "CAP" and f["status"] == "airborne" and f["count"] > 0 and not f["player"]
+            and not f.get("flown") and f.get("station", 1e18) <= t <= f.get("off", 0) - 300
+            and not f.get("intercept") and f.get("intercepts", 0) < MAX_INTERCEPTS)
+
+
+def air_check(c: Campaign, t: float, rng: random.Random) -> None:
+    """Each CAP on station looks for enemy flights near it and goes after the nearest it sees."""
     w = _war(c)
-    x, y, _ = pos_at(f, t)
-    for g in _enemy_caps(c, f["side"], (x, y), t, 120_000):
-        pair = sorted([f["id"], g["id"]])
-        if pair in w["engaged"] or not g["count"] or not f["count"]:
+    engaged = {tuple(p) for p in w["engaged"]}
+    flights = [f for f in w["flights"] if f["status"] == "airborne" and f["count"] > 0 and f["takeoff"] < t]
+    for cap in [f for f in flights if _on_station(f, t)]:
+        cx, cy, _ = pos_at(cap, t)
+        night = is_night(c, t)
+        seen = []
+        for g in flights:
+            if g["side"] == cap["side"] or tuple(sorted([cap["id"], g["id"]])) in engaged or g.get("aborted"):
+                continue
+            gx, gy, _ = pos_at(g, t)
+            d = _dist((cx, cy), (gx, gy))
+            if d > DETECT:
+                continue
+            p = P_DETECT["stealth"] if g["type"] in STEALTH else P_DETECT["night" if night else "day"]
+            if rng.random() < p:
+                seen.append((d, g))
+        if not seen:
             continue
-        w["engaged"].append(pair)
-        rf, rg = RATING.get(f["type"], 0.7), RATING.get(g["type"], 0.7)
-        lf = _lose(c, f, sum(rng.random() < 0.12 * rg / (rf + rg) for _ in range(f["count"])), t)
-        lg = _lose(c, g, sum(rng.random() < 0.12 * rf / (rf + rg) for _ in range(g["count"])), t)
-        c.log(f"{clock_label(c, t)} · Air battle: {f['callsign']} ({f['type']}) vs {g['callsign']} ({g['type']}). "
-              f"Losses {lf} and {lg}.", "CAP", f["type"], side=f["side"], t=t)
+        _, g = min(seen, key=lambda x: x[0])
+        _plan_intercept(c, cap, g, t)
+
+
+def _plan_intercept(c: Campaign, cap: dict, g: dict, t: float) -> None:
+    w = _war(c)
+    cx, cy, leg = pos_at(cap, t)
+    meet, dt = None, 0.0
+    for _ in range(4):  # where the intruder will be when we get there
+        gx, gy, _ = pos_at(g, t + dt)
+        meet = (gx, gy)
+        dt = _dist((cx, cy), meet) / PURSUIT
+    station = next(((r["x"], r["y"]) for r in cap["route"] if r["name"] == "STATION"), (cx, cy))
+    if t + dt >= g["land"] or _dist(station, meet) > CHASE:
+        return  # can't catch it before it's home, or too far from the station to chase
+    alt = cap["route"][0]["alt"]
+    t_meet = t + dt
+    t_back = t_meet + _dist(meet, station) / SPEED["jet"]
+    kept = [r for r in cap["route"] if r["t"] <= t]
+    later = [r for r in cap["route"] if r["t"] > t_back]
+    new = kept + [{"name": "NOW", "x": round(cx), "y": round(cy), "t": round(t, 1), "alt": alt, "speed": PURSUIT},
+                  {"name": "INTERCEPT", "x": round(meet[0]), "y": round(meet[1]), "t": round(t_meet, 1), "alt": alt,
+                   "speed": PURSUIT},
+                  {"name": "STATION", "x": round(station[0]), "y": round(station[1]), "t": round(t_back, 1), "alt": alt,
+                   "speed": SPEED["jet"]}]
+    if not later or later[-1]["name"] != "LAND":
+        base = c.data["field_pos"][cap["base"]]
+        later = [r for r in later if r["name"] != "LAND"] + [{
+            "name": "LAND", "x": base[0], "y": base[1], "t": round(t_back + _dist(station, base) / SPEED["jet"], 1),
+            "alt": alt, "speed": SPEED["jet"]}]
+    for r in new[len(kept):]:
+        r["ll"] = c.ll(r["x"], r["y"])
+    cap["route"] = new + later
+    cap["land"] = cap["route"][-1]["t"]
+    cap["intercept"] = {"target": g["id"], "t": round(t_meet, 1), "callsign": g["callsign"]}
+    cap["intercepts"] = cap.get("intercepts", 0) + 1
+    w["engaged"].append(sorted([cap["id"], g["id"]]))
+
+
+def resolve_intercept(c: Campaign, cap: dict, rng: random.Random) -> None:
+    w = _war(c)
+    it = cap.pop("intercept")
+    t = it["t"]
+    g = next((f for f in w["flights"] if f["id"] == it["target"]), None)
+    if not g or g["status"] != "airborne" or g["count"] <= 0 or not cap["count"]:
+        c.log(f"{clock_label(c, t)} · {cap['callsign']} lost contact with {it['callsign']}.", "CAP", cap["type"],
+              side=cap["side"], t=t)
+        return
+    x, y, _ = pos_at(cap, t)
+    rc = RATING.get(cap["type"], 0.7)
+    if _fighter(g):
+        rg = RATING.get(g["type"], 0.7)
+        lc = _lose(c, cap, sum(rng.random() < DOGFIGHT_KILL * rg / (rc + rg) for _ in range(cap["count"])), t)
+        lg = _lose(c, g, sum(rng.random() < DOGFIGHT_KILL * rc / (rc + rg) for _ in range(g["count"])), t)
+        text = (f"{cap['callsign']} ({cap['type']}) intercepted {g['callsign']} ({g['type']}): "
+                f"{lg} shot down, {lc} lost.")
+    else:
+        p = DOGFIGHT_KILL * 1.2 * rc / (rc + STRIKER_DEFENCE) * (0.5 if g["type"] in STEALTH else 1.0)
+        lg = _lose(c, g, sum(rng.random() < p for _ in range(g["count"])), t)
+        lc = _lose(c, cap, sum(rng.random() < 0.03 for _ in range(cap["count"])), t)
+        aborted = g["count"] > 0 and not g.get("resolved") and rng.random() < P_ABORT
+        if aborted:
+            g["aborted"] = True
+        text = (f"{cap['callsign']} ({cap['type']}) intercepted {g['callsign']} ({g['count'] + lg}x {g['type']}, "
+                f"{g['mission']}): {lg} shot down" + (f", {lc} lost" if lc else "")
+                + ("; the rest jettisoned and turned for home" if aborted else "") + ".")
+    w.setdefault("battles", []).append({"t": t, "ll": c.ll(x, y), "text": text,
+                                        "sides": [cap["side"], g["side"]], "kills": lg + lc})
+    w["battles"] = [b for b in w["battles"] if b["t"] >= t - BATTLE_MEMORY][-60:]
+    c.log(f"{clock_label(c, t)} · {text}", "CAP", cap["type"], side=cap["side"], t=t)
 
 
 def _after_capture(c: Campaign, t: float) -> None:
@@ -492,7 +600,11 @@ def _next_event(c: Campaign):
     for s in c.data["sites"]:
         if "repair_at" in s and s["repair_at"] < best[0]:
             best = (s["repair_at"], "repair", s)
+    if w.setdefault("next_air", w["clock"]) < best[0]:
+        best = (w["next_air"], "air", None)
     for f in w["flights"]:
+        if f["status"] == "airborne" and f.get("intercept") and f["intercept"]["t"] < best[0]:
+            best = (f["intercept"]["t"], "intercept", f)
         if f["status"] == "planned":
             cand = (f["takeoff"], "takeoff", f)
         elif f["status"] == "airborne" and not f["resolved"] and not f["player"]:
@@ -537,6 +649,11 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
                 resolve_attack(c, f, rng)
         elif kind == "repair":
             _repair(c, f)
+        elif kind == "air":
+            air_check(c, t, rng)
+            w["next_air"] = t + AIR_CHECK
+        elif kind == "intercept":
+            resolve_intercept(c, f, rng)
         elif kind == "land":
             f["status"], f["end"] = "landed", t
     w["clock"] = max(w["clock"], to_t)
@@ -879,6 +996,7 @@ def snapshot(c: Campaign) -> dict:
                    "zone": s["zone"]} for s in c.data["sites"]],
         "squadrons": [dict(sq, available=available(c, sq)) for sq in w["squadrons"]],
         "ai_only": sorted(AI_ONLY),
+        "battles": w.get("battles", []),
         "flights": [{k: v for k, v in f.items() if k != "route"} |
                     {"route": [{"name": r["name"], "ll": r["ll"], "t": r["t"], "alt": r.get("alt")}
                                for r in f["route"]]}

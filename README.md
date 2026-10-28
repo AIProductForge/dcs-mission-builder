@@ -74,7 +74,14 @@ spirit of Falcon BMS's dynamic campaign:
   level in DCS (RADIO altitude), so low-level and helicopter routes follow the terrain.
 - **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
   odds depend on the SAMs, short-range air defence and radar around the target and on enemy
-  CAP nearby. CAPs that meet fight it out.
+  CAP nearby.
+- **Intercepts.** Every 5 campaign minutes each CAP on station looks for enemy flights within
+  80 km (50% chance per look by day, 35% at night, 15% against the F-117), flies out to meet the
+  nearest one it sees (no further than 150 km from its station), fights, and returns to its
+  station; at most two intercepts per sortie. Fighter against fighter, both sides can lose
+  aircraft (weighted by aircraft quality); against strikers, transports and bombers the CAP does
+  the killing, and survivors may jettison and abort the attack. Each air battle leaves a burst
+  on the map for 20 campaign minutes (red when aircraft were lost); hover it for what happened.
 - **Jump in now.** Pauses the war where it is. Pick a friendly flight whose aircraft you own:
   one in the air starts you in the air where the map shows it, with the rest of its route (if its
   target is already behind it, you fly it home); a planned one (**Fly this flight**) moves the clock
