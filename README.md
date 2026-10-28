@@ -67,7 +67,11 @@ spirit of Falcon BMS's dynamic campaign:
   from takeoff to landing; click one for its route, target and result. **Coverage rings** (top right
   of the map) show the air defence of either side: SAMs (40 km), short-range air defence (8 km) and
   early-warning radar (80 km). The radii are the ranges the war's odds use, not each system's exact
-  DCS range.
+  DCS range. **Map** switches the base map (topographic, satellite, plain) and adds a hillshade
+  relief overlay. A selected flight shows its **terrain profile**: ground height along its route
+  (Copernicus 90 m elevation data via Open-Meteo) against its altitude, with the lowest clearance;
+  stretches within 100 m of the ground are red. Legs at or below 500 m are flown above ground
+  level in DCS (RADIO altitude), so low-level and helicopter routes follow the terrain.
 - **AI results.** Flights nobody flies are resolved when they reach their target: hit and loss
   odds depend on the SAMs, short-range air defence and radar around the target and on enemy
   CAP nearby. CAPs that meet fight it out.

@@ -880,7 +880,8 @@ def snapshot(c: Campaign) -> dict:
         "squadrons": [dict(sq, available=available(c, sq)) for sq in w["squadrons"]],
         "ai_only": sorted(AI_ONLY),
         "flights": [{k: v for k, v in f.items() if k != "route"} |
-                    {"route": [{"name": r["name"], "ll": r["ll"], "t": r["t"]} for r in f["route"]]}
+                    {"route": [{"name": r["name"], "ll": r["ll"], "t": r["t"], "alt": r.get("alt")}
+                               for r in f["route"]]}
                     for f in w["flights"]],
         "events": [e for e in c.data["events"] if "t" in e or e.get("sortie")][-40:],
         "won": not c.fields_of("red"), "lost": not c.fields_of("blue"),

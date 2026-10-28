@@ -103,3 +103,10 @@ details.commander textarea { width: 100%; background: #10120f; color: var(--pane
 .map-layers label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
 .map-layers input { accent-color: var(--accent); margin: 0; }
 .map-layers .sep { border-top: 1px solid var(--panel-line); margin: 2px 0; }
+
+.map-layers input[type=radio] { accent-color: var(--accent); margin: 0; }
+.profile { margin: 6px 0 8px; }
+.profile-head { display: flex; justify-content: space-between; font-size: 11px; color: var(--panel-muted); margin-bottom: 3px; }
+.profile-head span:first-child { font-family: var(--cond); text-transform: uppercase; letter-spacing: .1em; color: var(--accent); }
+#profile-note.warn { color: #f08a80; }
+#profile-canvas { width: 100%; height: auto; background: #10120f; border: 1px solid var(--panel-line); border-radius: 3px; display: block; }

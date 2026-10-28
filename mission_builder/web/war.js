@@ -75,9 +75,19 @@ function inAir(f, t) {
 function initMap() {
   if (typeof L === "undefined") { $("map").textContent = "Map unavailable offline."; return; }
   S.map = L.map("map", { zoomControl: true, attributionControl: true });
-  L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-    maxZoom: 13, attribution: 'Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | style © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
-  }).addTo(S.map);
+  S.bases = {
+    topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+      maxZoom: 13, attribution: 'Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | style © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
+    satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 17, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }),
+    plain: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
+      maxZoom: 17, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>' }),
+  };
+  S.hillshade = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 15, opacity: 0.45, attribution: "Hillshade © Esri" });
+  S.map.attributionControl.addAttribution("Elevation: Copernicus DEM GLO-90 via Open-Meteo");
+  // Leaflet measures its container once; re-measure when the layout changes it (fonts, panels, resize).
+  new ResizeObserver(() => S.map.invalidateSize()).observe($("map"));
   S.ringRenderer = L.canvas({ padding: 0.5 });  // hundreds of circles: canvas keeps panning smooth
   for (const k of ["rings", "sites", "fields", "route", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
   // With the frag form open on a CAP, a click on the map sets the station.
@@ -97,6 +107,140 @@ function planeIcon(f, hdg, selected) {
     `<div class="flight-icon${selected ? " sel" : ""}"><svg width="16" height="16" viewBox="-8 -8 16 16" style="transform:rotate(${hdg}deg)">` +
     `<path d="M0 -7 L5 6 L0 3 L-5 6 Z" fill="${c}" stroke="#fff" stroke-width="1"/></svg>` +
     `<span class="flight-tag">${tag}</span></div>` });
+}
+
+// ---------- base maps and terrain ----------
+function setupBaseMaps() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("war-map") || "{}"); } catch (e) { /* storage blocked */ }
+  const pick = () => {
+    const base = document.querySelector('input[name="base"]:checked').value;
+    for (const [k, layer] of Object.entries(S.bases)) {
+      if (k === base) { if (!S.map.hasLayer(layer)) layer.addTo(S.map); layer.bringToBack(); }
+      else if (S.map.hasLayer(layer)) S.map.removeLayer(layer);
+    }
+    if ($("hillshade").checked) { if (!S.map.hasLayer(S.hillshade)) S.hillshade.addTo(S.map); }
+    else if (S.map.hasLayer(S.hillshade)) S.map.removeLayer(S.hillshade);
+    try { localStorage.setItem("war-map", JSON.stringify({ base, hillshade: $("hillshade").checked })); } catch (e) { /* blocked */ }
+  };
+  if (saved.base) { const r = document.querySelector(`input[name="base"][value="${saved.base}"]`); if (r) r.checked = true; }
+  if (saved.hillshade) $("hillshade").checked = true;
+  for (const el of document.querySelectorAll('input[name="base"], #hillshade')) el.addEventListener("change", pick);
+  pick();
+}
+
+// Ground height along a flight's route (Copernicus 90 m DEM via Open-Meteo, up to 100 points per
+// request) against its altitude. Altitudes at or below 500 m are above ground level, as in the mission.
+const AGL_BELOW = 500;
+S.profiles = {};
+
+function routeSamples(f, n = 100) {
+  // Fly the route once: a CAP's orbit legs repeat the same two points, so stop after the first lap.
+  const pts = [];
+  const seen = new Set();
+  for (const r of f.route) {
+    const key = r.ll.join(",") + r.name;
+    if (r.name === "CAP" || r.name === "STATION") { if (seen.has(r.name)) continue; seen.add(r.name); }
+    pts.push(r);
+    if (key && pts.length > 1 && r.name === "LAND") break;
+  }
+  const legs = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = S.map.distance(pts[i - 1].ll, pts[i].ll);
+    legs.push({ a: pts[i - 1], b: pts[i], d, start: total });
+    total += d;
+  }
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const dist = total * k / (n - 1);
+    const leg = legs.find((l) => dist <= l.start + l.d) || legs[legs.length - 1];
+    const u = leg.d ? (dist - leg.start) / leg.d : 0;
+    out.push({ dist, lat: leg.a.ll[0] + (leg.b.ll[0] - leg.a.ll[0]) * u, lon: leg.a.ll[1] + (leg.b.ll[1] - leg.a.ll[1]) * u,
+               alt: leg.b.name === "LAND" ? null : leg.b.alt ?? leg.a.alt, wp: u < 0.01 ? leg.a.name : null });
+  }
+  out[out.length - 1].wp = pts[pts.length - 1].name;
+  return out;
+}
+
+async function showProfile(f) {
+  const box = $("sel-profile");
+  if (!f || !f.route || f.route.length < 2 || !S.map) { box.hidden = true; return; }
+  box.hidden = false;
+  if (!S.profiles[f.id]) {
+    $("profile-note").textContent = "loading terrain…";
+    $("profile-note").className = "";
+    const samples = routeSamples(f);
+    const q = `latitude=${samples.map((p) => p.lat.toFixed(4)).join(",")}&longitude=${samples.map((p) => p.lon.toFixed(4)).join(",")}`;
+    try {
+      const r = await fetch(`https://api.open-meteo.com/v1/elevation?${q}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const elev = (await r.json()).elevation;
+      samples.forEach((p, i) => { p.ground = Math.max(0, elev[i] ?? 0); });
+      S.profiles[f.id] = samples;
+    } catch (e) {
+      $("profile-note").textContent = "terrain data unavailable (offline?)";
+      return;
+    }
+  }
+  if (S.selected === f.id) drawProfile(f, S.profiles[f.id]);
+}
+
+function drawProfile(f, samples) {
+  const cv = $("profile-canvas"), g = cv.getContext("2d");
+  const W = cv.width, H = cv.height, padL = 34, padB = 16, padT = 6;
+  // The flight's height above sea level at each sample: low legs follow the ground, and it climbs
+  // out over the first and descends over the last RAMP metres (left out of the clearance check).
+  const RAMP = 25000, end = samples[samples.length - 1].dist;
+  let cruise = samples.find((p) => p.alt !== null)?.alt ?? 0;
+  for (const p of samples) {
+    if (p.alt !== null) cruise = p.alt;
+    const msl = cruise <= AGL_BELOW ? p.ground + cruise : cruise;
+    const k = Math.min(1, p.dist / RAMP, (end - p.dist) / RAMP);
+    p.ramp = k < 1;
+    p.msl = p.ground + (msl - p.ground) * Math.max(0, k);
+  }
+  const top = Math.max(...samples.map((p) => Math.max(p.msl, p.ground))) * 1.1 + 50;
+  const X = (d) => padL + (W - padL - 4) * d / samples[samples.length - 1].dist;
+  const Y = (m) => H - padB - (H - padB - padT) * m / top;
+  g.clearRect(0, 0, W, H);
+  g.font = "10px IBM Plex Mono, monospace";
+  g.fillStyle = "#9aa08d";
+  g.strokeStyle = "#3a4034";
+  for (const m of [0, top / 2, top]) {
+    g.beginPath(); g.moveTo(padL, Y(m)); g.lineTo(W - 4, Y(m)); g.stroke();
+    g.fillText(`${Math.round(m / 100) * 100}`, 2, Y(m) + 3);
+  }
+  // ground
+  g.beginPath(); g.moveTo(X(0), Y(0));
+  for (const p of samples) g.lineTo(X(p.dist), Y(p.ground));
+  g.lineTo(X(samples[samples.length - 1].dist), Y(0)); g.closePath();
+  g.fillStyle = "#6b5a3e"; g.fill();
+  // flight path, red where it's close to the ground
+  let lowest = Infinity, lowestAt = null;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1], b = samples[i];
+    const clear = Math.min(a.msl - a.ground, b.msl - b.ground);
+    const counted = !a.ramp && !b.ramp;
+    if (counted && clear < lowest) { lowest = clear; lowestAt = b; }
+    g.strokeStyle = counted && clear < 100 ? "#f08a80" : "#5b8fd6";
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(X(a.dist), Y(a.msl)); g.lineTo(X(b.dist), Y(b.msl)); g.stroke();
+  }
+  g.lineWidth = 1;
+  g.fillStyle = "#d9dccf";
+  for (const p of samples) {
+    if (!p.wp) continue;
+    g.fillRect(X(p.dist) - 0.5, H - padB, 1, 3);
+    const label = p.wp === "TARGET" ? "TGT" : p.wp.slice(0, 4);
+    g.fillText(label, Math.min(W - 26, Math.max(padL, X(p.dist) - 10)), H - 3);
+  }
+  const maxGround = Math.max(...samples.map((p) => p.ground));
+  const km = Math.round(samples[samples.length - 1].dist / 1000);
+  const note = $("profile-note");
+  note.className = lowest < 100 ? "warn" : "";
+  note.textContent = `${km} km · highest ground ${Math.round(maxGround)} m` +
+    (Number.isFinite(lowest) ? ` · lowest clearance ${Math.max(0, Math.round(lowest))} m` : "");
 }
 
 function ringChoice() {
@@ -233,7 +377,7 @@ function renderAto() {
 function renderSelected() {
   const f = S.snap.flights.find((x) => x.id === S.selected);
   $("selected").hidden = !f;
-  if (!f) return;
+  if (!f) { S.profileFor = null; return; }
   const t = clockNow();
   $("sel-title").textContent = `${f.callsign} · ${f.count}× ${f.type}`;
   const lines = [`${f.side === "blue" ? "Friendly" : "Enemy"} ${flightTask(f)}`, `From ${f.base}. Takeoff ${label(f.takeoff)}` +
@@ -252,6 +396,7 @@ function renderSelected() {
   // A friendly flight in the air can be joined now, where it is (not when it's about to land).
   const joinable = f.side === "blue" && f.status === "airborne" && !f.player && f.count > 0 && inAir(f, t) &&
                    t < f.land - 300 && S.snap.mode === "running";
+  if (S.profileFor !== f.id) { S.profileFor = f.id; showProfile(f); }
   $("btn-fly").hidden = !(open || joinable) || S.snap.ai_only.includes(f.type);
   $("btn-fly").textContent = joinable ? "Jump in now (in the air)" : "Fly this flight (at takeoff)";
   $("btn-scrub").hidden = !open;
@@ -692,6 +837,7 @@ async function fly() {
 
 async function boot() {
   initMap();
+  if (S.map) setupBaseMaps();
   setupRings();
   const o = await api("/api/options");
   const theatres = Object.keys(o.campaigns);

@@ -672,6 +672,7 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
                 t.add_condition(condition.TimeAfter(max(1, a.get("team_delay") or 1)))
                 t.add_action(action.ActivateGroup(team.id))
                 B.m.triggerrules.triggers.append(t)
+        _follow_terrain(g)
         if a["delay"] > 0:
             g.late_activation = True
             t = TriggerOnce(comment=f"Launch {a['id']}")
@@ -696,6 +697,18 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
 
 
 # Ground forces for a campaign site, by side and role (see add_ground).
+# Waypoints at or below this height are flown above ground level (RADIO), not sea level (BARO,
+# pydcs's default): a 150 m low-level leg or a 120 m helicopter leg would otherwise be routed
+# into any terrain higher than that.
+AGL_BELOW = 500
+
+
+def _follow_terrain(group) -> None:
+    for pt in group.points:
+        if pt.alt <= AGL_BELOW and getattr(pt, "type", "Turning Point") == "Turning Point":
+            pt.alt_type = "RADIO"
+
+
 _A = vehicles.Armor
 GROUND_UNITS = {
     "red": {"sam": SAM_SITES["SA-6"][0], "ewr": [AD.X_1L13_EWR], "shorad": [AD.ZSU_23_4_Shilka, AD.Strela_10M3],
@@ -828,6 +841,7 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
             player.add_waypoint(ip, cruise_alt, cruise_speed, "IP")
         player.add_waypoint(objective, cruise_alt, cruise_speed, "OBJECTIVE")
     player.land_at(home).name = "RECOVERY"
+    _follow_terrain(player)
 
     # ---- objective content ----
     defended_point = objective
