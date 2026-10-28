@@ -89,7 +89,7 @@ function initMap() {
   // Leaflet measures its container once; re-measure when the layout changes it (fonts, panels, resize).
   new ResizeObserver(() => S.map.invalidateSize()).observe($("map"));
   S.ringRenderer = L.canvas({ padding: 0.5 });  // hundreds of circles: canvas keeps panning smooth
-  for (const k of ["rings", "sites", "fields", "route", "battles", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
+  for (const k of ["rings", "sites", "fields", "route", "battles", "pilots", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
   // With the frag form open on a CAP, a click on the map sets the station.
   S.map.on("click", (e) => {
     if (!$("plan").open || $("p-mission").value !== "CAP") return;
@@ -582,6 +582,7 @@ function renderMissions() {
   const sel = $("p-mission"), keep = sel.value;
   sel.innerHTML = "";
   for (const m of (sq ? sq.missions : [])) {
+    if (m === "CSAR") continue;   // rescues are planned automatically for downed pilots
     const o = document.createElement("option");
     o.value = o.textContent = m;
     sel.appendChild(o);
@@ -785,9 +786,33 @@ function drawBattles() {
   }
 }
 
+// Downed pilots: a marker where each came down, until rescued, captured or home on foot.
+const PILOT_STATUS = { down: "waiting for rescue", rescued: "rescued", recovered: "made it back on foot", captured: "captured" };
+
+function drawPilots() {
+  if (!S.map || !S.snap) return;
+  const t = clockNow();
+  const pilots = (S.snap.pilots || []).filter((p) => p.t <= t && (p.status === "down" || t - p.t < 3600));
+  const key = pilots.map((p) => p.id + p.status).join(",") + "|" + $("show-red").checked;
+  if (S.pilotKey === key) return;
+  S.pilotKey = key;
+  S.layers.pilots.clearLayers();
+  for (const p of pilots) {
+    if (p.side !== "blue" && !$("show-red").checked) continue;
+    const rescue = p.csar ? S.snap.flights.find((f) => f.id === p.csar) : null;
+    const tip = `Downed pilot (${p.side === "blue" ? "friendly" : "enemy"}) from ${p.from}, down since ${label(p.t)}: ` +
+      PILOT_STATUS[p.status] + (p.status === "down" && rescue ? `; ${rescue.callsign} on the way` : "");
+    L.marker(p.ll, { keyboard: false, zIndexOffset: 400, icon: L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+      html: `<div class="pilot ${p.side} ${p.status}">⛑</div>` }) })
+      .bindTooltip(tip, { className: "map-tip" })
+      .addTo(S.layers.pilots);
+  }
+}
+
 function render(full) {
   renderClock();
   drawBattles();
+  drawPilots();
   if (!$("plan").open || full) renderPlan();
   renderAto();
   renderSelected();
@@ -941,7 +966,7 @@ async function boot() {
   setInterval(() => refresh(false), 2000);
   setInterval(() => api("/api/ping", {}).catch(() => setStatus("Mission Builder has stopped. Relaunch it to continue.", "err")), 15000);
   api("/api/ping", {}).catch(() => {});
-  setInterval(() => { if (running()) { drawFlights(); drawBattles(); } }, 100);
+  setInterval(() => { if (running()) { drawFlights(); drawBattles(); drawPilots(); } }, 100);
   setInterval(() => { if (running()) { renderAto(); renderSelected(); } }, 1000);
 }
 

@@ -117,3 +117,7 @@ details.commander textarea { width: 100%; background: #10120f; color: var(--pane
 .map-legend i.battle-key { color: #f2a93b; font-style: normal; }
 .jump-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .jump-row .btn.jump { margin-top: 0; }
+.pilot { font-size: 15px; line-height: 18px; text-align: center; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+.pilot.blue { color: #2f6fd6; } .pilot.red { color: #d04a3c; }
+.pilot.rescued, .pilot.recovered { opacity: .45; } .pilot.captured { opacity: .45; filter: grayscale(1); }
+.map-legend i.pilot-key { color: #2f6fd6; font-style: normal; }

@@ -17,6 +17,8 @@ prefix as now.
 | `EJECT\|unit\|t\|x\|y` | a pilot ejects (`S_EVENT_EJECTION`) | for CSAR later |
 | `POS\|group\|t\|x\|y\|alt\|alive\|fuel\|air` | every 5 min of mission time, and at END | one line per tracked group: position of its lead unit, units alive, lead's fuel 0-1, airborne or not |
 | `HP\|site\|alive\|placed` | at END | each campaign site's surviving units out of those placed |
+| `KILL\|target\|killer` | a tracked unit is killed by a campaign aircraft (`S_EVENT_KILL`) | for the per-flight debrief |
+| `SHOTS\|flight\|n` | at END | weapons released per campaign flight (`S_EVENT_SHOT`) |
 | `END\|t` | mission end (as now) | mission time |
 
 Tracked = every group the campaign put in the mission: AI flights (`MBF:<flight>`), the player's
@@ -48,7 +50,8 @@ The mission covered a window: from its start (the moment you took or joined the 
    units. Repairs restore strength over 12-30 hours like destroyed sites.
 4. **Flights that weren't in the mission** run under the engine for the window as usual (the
    clock advance resolves them).
-5. **Ejections**: logged with position (for a CSAR mission type later); no other effect yet.
+5. **Ejections**: each becomes a downed pilot at that position, for the rescue planner (built
+   2026-10-27: see the README, "Downed pilots and rescue").
 6. **Summary**: the "Back from DCS" debrief adds landings away from home, flights repositioned,
    and sites damaged.
 

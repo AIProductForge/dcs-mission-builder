@@ -326,6 +326,8 @@ def results_script(sortie_id: str, unit_names: list[str]) -> str:
     EJECT|unit|t|x|y   a tracked aircraft's pilot ejected
     POS|flight|t|x|y|alt|alive|fuel|air   every POS_EVERY s and at the end, per flight seen alive
     HP|site|alive|placed                   at the end, per campaign site
+    KILL|target|killer                     a tracked unit killed by a campaign aircraft
+    SHOTS|flight|n                         at the end: weapons released per flight
     START|n|t / END|t
     Campaign coordinates are pydcs's: x = DCS x, y = DCS z."""
     names = ",".join(json.dumps(n) for n in unit_names)
@@ -333,7 +335,7 @@ def results_script(sortie_id: str, unit_names: list[str]) -> str:
 do
   local sortie = "{sortie_id}"
   local tracked = {{{names}}}
-  local dead, seen = {{}}, {{}}
+  local dead, seen, shots = {{}}, {{}}, {{}}
   local flights, sites = {{}}, {{}}
   for _, n in ipairs(tracked) do
     local fid = string.match(n, "^MBF:([^:]+):")
@@ -390,7 +392,15 @@ do
     if e.id == world.event.S_EVENT_DEAD or e.id == world.event.S_EVENT_UNIT_LOST then
       mark(nameOf(e.initiator))
     elseif e.id == world.event.S_EVENT_KILL then
-      mark(nameOf(e.target))
+      local victim, killer = nameOf(e.target), nameOf(e.initiator)
+      if victim and killer and string.sub(victim, 1, 2) == "MB" and string.sub(killer, 1, 4) == "MBF:" then
+        log("KILL|" .. victim .. "|" .. killer)
+      end
+      mark(victim)
+    elseif e.id == world.event.S_EVENT_SHOT then
+      local n = nameOf(e.initiator)
+      local fid = n and string.match(n, "^MBF:([^:]+):")
+      if fid then shots[fid] = (shots[fid] or 0) + 1 end
     elseif e.id == world.event.S_EVENT_LAND then
       local n = nameOf(e.initiator)
       if n and string.sub(n, 1, 4) == "MBF:" then
@@ -405,6 +415,7 @@ do
     elseif e.id == world.event.S_EVENT_MISSION_END then
       pcall(report)
       pcall(health)
+      for fid, n in pairs(shots) do log("SHOTS|" .. fid .. "|" .. n) end
       log("END|" .. string.format("%.0f", timer.getTime()))
     end
   end
@@ -447,7 +458,7 @@ _STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
 
 def _new_report() -> dict:
     return {"dead": set(), "end": False, "start": False, "first": None, "last": None, "mission_time": None,
-            "pos": {}, "lands": {}, "ejects": [], "hp": {}, "last_pos_t": 0.0}
+            "pos": {}, "lands": {}, "ejects": [], "hp": {}, "last_pos_t": 0.0, "kills": [], "shots": {}}
 
 
 def scan(logs_dir: Path, sorties: list[dict], seen_zips: set[str], force_live: bool = False) -> dict:
@@ -501,6 +512,10 @@ def scan(logs_dir: Path, sorties: list[dict], seen_zips: set[str], force_live: b
                     rec["ejects"].append((args[0], float(args[1]), float(args[2]), float(args[3])))
                 elif kind == "HP" and len(args) >= 3:
                     rec["hp"][args[0]] = (int(args[1]), int(args[2]))
+                elif kind == "KILL" and len(args) >= 2:
+                    rec["kills"].append((args[0], args[1]))
+                elif kind == "SHOTS" and len(args) >= 2:
+                    rec["shots"][args[0]] = int(args[1])
             except ValueError:
                 continue  # a malformed line: skip it, keep the rest
         for sid, rec in reports.items():

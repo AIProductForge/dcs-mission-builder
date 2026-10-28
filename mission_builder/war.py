@@ -50,7 +50,7 @@ KEEP_FINISHED = 2 * 3600            # finished flights stay on the ATO this long
 # Red squadrons: (type id, missions, helicopter). Blue flies the player's own aircraft.
 RED_SQUADRONS = [("MiG-29S", ["CAP"], False), ("Su-27", ["CAP"], False), ("Su-24M", ["Strike", "SEAD"], False),
                  ("Su-25T", ["SEAD", "CAS", "Strike"], False), ("Su-25", ["CAS", "Strike"], False),
-                 ("Mi-24V", ["CAS"], True)]
+                 ("Mi-24V", ["CAS", "CSAR"], True)]
 # Air-to-air strength, for CAP fights (unknown types count as 0.7).
 RATING = {"F-15C": 1.0, "Su-27": 1.0, "J-11A": 1.0, "Su-33": 0.95, "F-14B": 0.95, "F-14A-135-GR": 0.95,
           "FA-18C_hornet": 0.9, "F-16C_50": 0.9, "MiG-29S": 0.85, "MiG-29A": 0.75, "MiG-29G": 0.75,
@@ -63,7 +63,15 @@ BOMBERS = [("F-117A", ["Strike"], 8, 230.0, 7000), ("B-1B", ["Strike"], 6, 250.0
            ("B-52H", ["Strike"], 6, 200.0, 10000)]
 BOMBER_RANGE = 3_000_000
 # Special forces: an AI transport helicopter squadron that inserts a team near the target.
-SOF_SQUADRON = ("UH-60A", ["SOF"], 4, 65.0, 60)
+SOF_SQUADRON = ("UH-60A", ["SOF", "CSAR"], 4, 65.0, 60)
+# Downed pilots: share of lost aircraft whose crew eject (helicopter crews less often), how long
+# before an unrescued pilot is captured in enemy territory or walks home in friendly territory.
+P_EJECT = {"jet": 0.7, "heli": 0.4}
+CAPTURE_AFTER = 6 * 3600
+WALK_HOME_AFTER = 2 * 3600
+CSAR_PER_PLAN = 2
+CSAR_TRIES = 2                # rescue attempts per pilot before the side gives up on them
+CSAR_RANGE = {"blue": 160_000, "red": 130_000}
 SOF_RANGE = 160_000
 SOF_STANDOFF = 4_000          # the landing zone is this far short of the target
 SOF_ON_GROUND = 40 * 60       # the team works for this long before extraction
@@ -194,7 +202,14 @@ def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float,
     pts = [("TAKEOFF", base, speed)]
     marks = {}
     waits = {}
-    if mission == "SOF" or profile == "sof":
+    if mission == "CSAR":
+        pts.append(("LZ", target, speed))
+        pts.append(("TARGET", target, speed))   # on the ground picking up the pilot
+        waits[len(pts) - 1] = 300
+        marks["tot"] = len(pts) - 1
+        pts.append(("EXTRACT", target, speed))
+        waits[len(pts) - 1] = 300
+    elif mission == "SOF" or profile == "sof":
         lz = _toward(target, base, SOF_STANDOFF)
         pts.append(("LZ", lz, speed))
         pts.append(("TARGET", lz, speed))   # the raid: the team is on the ground near the target
@@ -327,10 +342,15 @@ def plan(c: Campaign, now: float, rng: random.Random) -> None:
 
 # --- resolution ---------------------------------------------------------------------------
 
-def _lose(c: Campaign, f: dict, n: int, t: float) -> int:
+def _lose(c: Campaign, f: dict, n: int, t: float, pilots: bool = True) -> int:
     n = min(n, f["count"])
     if n <= 0:
         return 0
+    if pilots:  # crews that get out (DCS reports its own ejections, so it passes pilots=False)
+        x, y, _ = pos_at(f, t)
+        for _ in range(n):
+            if random.random() < P_EJECT["heli" if f["heli"] else "jet"]:
+                add_pilot(c, f, x, y, t)
     f["count"] -= n
     f["losses"] += n
     sq = next(s for s in _war(c)["squadrons"] if s["id"] == f["squadron"])
@@ -339,6 +359,130 @@ def _lose(c: Campaign, f: dict, n: int, t: float) -> int:
     if f["count"] <= 0:
         f["status"], f["end"] = "lost", t
     return n
+
+
+def add_pilot(c: Campaign, f: dict | None, x: float, y: float, t: float, side: str | None = None) -> dict:
+    w = _war(c)
+    w["pilot_seq"] = w.get("pilot_seq", 0) + 1
+    pilot = {"id": f"P{w['pilot_seq']}", "side": side or f["side"], "x": round(x), "y": round(y), "ll": c.ll(x, y),
+             "t": round(t, 1), "status": "down", "from": f"{f['callsign']} ({f['type']})" if f else "unknown",
+             "csar": None}
+    w.setdefault("pilots", []).append(pilot)
+    return pilot
+
+
+def _territory(c: Campaign, xy) -> str:
+    """The side whose airfield is nearest: a rough idea of whose ground a pilot came down on."""
+    n = min(c.data["field_pos"], key=lambda k: _dist(c.data["field_pos"][k], xy))
+    return c.data["fields"][n]
+
+
+def pilots_tick(c: Campaign, t: float) -> None:
+    """Unrescued pilots: captured in enemy territory, home on foot in friendly territory."""
+    for pl in _war(c).get("pilots", []):
+        if pl["status"] != "down":
+            continue
+        age = t - pl["t"]
+        mine = _territory(c, (pl["x"], pl["y"])) == pl["side"]
+        if mine and age >= WALK_HOME_AFTER:
+            pl["status"] = "recovered"
+            c.log(f"{clock_label(c, t)} · Pilot from {pl['from']} made it back to friendly lines.", side=pl["side"], t=t)
+        elif not mine and age >= CAPTURE_AFTER:
+            pl["status"] = "captured"
+            c.log(f"{clock_label(c, t)} · Pilot from {pl['from']} was captured.", side=pl["side"], t=t)
+    w = _war(c)
+    w["pilots"] = [pl for pl in w.get("pilots", []) if pl["status"] == "down" or t - pl["t"] < 24 * 3600][-200:]
+
+
+def plan_csar(c: Campaign, now: float, rng: random.Random) -> None:
+    """Send a rescue helicopter (with a CAP over the pickup when fighters are free) to downed pilots."""
+    w = _war(c)
+    lo = now + PLAN_AHEAD[0]
+    for side in ("blue", "red"):
+        waiting = [pl for pl in w.get("pilots", []) if pl["side"] == side and pl["status"] == "down" and not pl["csar"]
+                   and pl.get("tries", 0) < CSAR_TRIES]
+        sent = 0
+        for pl in sorted(waiting, key=lambda p: p["t"]):
+            if sent >= CSAR_PER_PLAN:
+                break
+            xy = (pl["x"], pl["y"])
+            helos = [sq for sq in w["squadrons"] if sq["side"] == side and "CSAR" in sq["missions"] and sq["total"] > 0
+                     and available(c, sq) >= 1 and _dist(c.data["field_pos"][sq["base"]], xy) <= CSAR_RANGE[side]]
+            if not helos:
+                continue
+            sq = min(helos, key=lambda q: _dist(c.data["field_pos"][q["base"]], xy))
+            f = _new_flight(c, sq, "CSAR", min(2, available(c, sq)), rng.uniform(lo, lo + 600), xy)
+            f["pilot"], f["target_name"] = pl["id"], f"downed pilot from {pl['from']}"
+            pl["csar"] = f["id"]
+            pl["tries"] = pl.get("tries", 0) + 1
+            sent += 1
+            escorts = [q for q in w["squadrons"] if q["side"] == side and "CAP" in q["missions"] and not q["heli"]
+                       and not q.get("manual") and q["total"] > 0 and available(c, q) >= 2]
+            if escorts:  # fighters over the pickup, timed to be there first
+                q = min(escorts, key=lambda q: _dist(c.data["field_pos"][q["base"]], xy))
+                e = _new_flight(c, q, "CAP", 2, f["takeoff"], xy)
+                shift = (f["tot"] - 600) - e["station"]
+                for r in e["route"]:
+                    r["t"] = round(r["t"] + shift, 1)
+                for k in ("takeoff", "land", "station", "off"):
+                    e[k] = round(e[k] + shift, 1)
+                e["target_name"] = f"cover for {f['callsign']}'s rescue"
+                if e["takeoff"] < now:
+                    w["flights"].remove(e)
+            c.log(f"{clock_label(c, now)} · {f['callsign']} ({f['count']}x {sq['type']}) tasked to rescue the pilot from "
+                  f"{pl['from']}.", "CSAR", sq["type"], side=side, t=now)
+
+
+def resolve_csar(c: Campaign, f: dict, rng: random.Random) -> None:
+    t = f["tot"]
+    f["resolved"] = True
+    pl = next((p for p in _war(c).get("pilots", []) if p["id"] == f.get("pilot")), None)
+    if not pl or pl["status"] != "down":
+        f["result"] = "the pilot was no longer there"
+        return
+    threat = _threat(c, f, (pl["x"], pl["y"]), t)
+    escort = any(g["side"] == f["side"] and g["mission"] == "CAP" and g["status"] == "airborne"
+                 and _dist(pos_at(g, t)[:2], (pl["x"], pl["y"])) <= 60_000 for g in _war(c)["flights"])
+    lost = _lose(c, f, sum(rng.random() < min(0.3, 0.03 + 0.05 * threat) for _ in range(f["count"])), t)
+    ok = f["count"] > 0 and rng.random() < max(0.2, 0.85 - 0.12 * threat + (0.1 if escort else 0.0))
+    if ok:
+        pl["status"] = "rescued"
+        f["result"] = f"rescued the pilot from {pl['from']}"
+    else:
+        pl["csar"] = None   # try again next time
+        f["result"] = "couldn't reach the pilot"
+    if lost:
+        f["result"] += f"; lost {lost}"
+    c.log(f"{clock_label(c, t)} · {f['callsign']} ({f['start_count']}x {f['type']}, CSAR) {f['result']}.", "CSAR", f["type"],
+          side=f["side"], t=t)
+
+
+def migrate(c: Campaign) -> bool:
+    """Older wars: rescue roles for the helicopter squadrons."""
+    changed = False
+    for sq in _war(c)["squadrons"]:
+        if sq["type"] in ("UH-60A", "Mi-24V") and "CSAR" not in sq["missions"]:
+            sq["missions"] = sq["missions"] + ["CSAR"]
+            changed = True
+    w = _war(c)
+    if w.get("ejections"):  # ejections recorded before there were downed pilots
+        by_id = {f["id"]: f for f in w["flights"]}
+        for e in w.pop("ejections"):
+            fid = e["unit"].split(":")[1] if e["unit"].startswith("MBF:") else None
+            f = by_id.get(fid)
+            if f:
+                add_pilot(c, f, e["x"], e["y"], e["t"])
+            else:
+                side = "blue" if fid and fid.startswith("B") else "red"
+                add_pilot(c, None, e["x"], e["y"], e["t"], side=side)
+        changed = True
+    return changed
+
+
+def downed_pilots_ground(c: Campaign) -> list[dict]:
+    """Pilots still down, to place in a mission as a lone soldier where they came down."""
+    return [{"id": pl["id"], "side": pl["side"], "role": "pilot", "x": pl["x"], "y": pl["y"], "zone": "", "strength": 1.0}
+            for pl in _war(c).get("pilots", []) if pl["status"] == "down"]
 
 
 def _enemy_caps(c: Campaign, side: str, xy, t: float, radius: float) -> list[dict]:
@@ -360,7 +504,7 @@ def _threat(c: Campaign, f: dict, xy, t: float, gone=frozenset()) -> float:
     """How dangerous it is for this flight over xy at time t. `gone`: site ids to treat as
     already destroyed (for estimating a sequence of strikes)."""
     profile = f.get("profile", "standard")
-    if profile == "sof" or f["mission"] == "SOF":
+    if profile == "sof" or f["mission"] in ("SOF", "CSAR"):
         threat = 0.0
         for s in c.alive_sites(other(f["side"])):
             if s["id"] in gone:
@@ -634,7 +778,9 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
         w["clock"] = max(w["clock"], t)
         changed = True
         if kind == "plan":
+            pilots_tick(c, t)
             plan(c, t, rng)
+            plan_csar(c, t, rng)
             w["next_plan"] = t + PLAN_EVERY
         elif kind == "replenish":
             for sq in w["squadrons"]:
@@ -649,6 +795,8 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
         elif kind == "resolve":
             if f["mission"] == "CAP":
                 resolve_station(c, f, rng)
+            elif f["mission"] == "CSAR":
+                resolve_csar(c, f, rng)
             else:
                 resolve_attack(c, f, rng)
         elif kind == "repair":
@@ -682,6 +830,8 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
     sq = next((x for x in w["squadrons"] if x["id"] == squadron_id and x["side"] == "blue"), None)
     if not sq or sq["total"] <= 0:
         raise RuntimeError("Pick a friendly squadron that still has aircraft.")
+    if mission == "CSAR":
+        raise RuntimeError("Rescue flights are planned automatically for downed pilots.")
     if mission not in sq["missions"]:
         raise RuntimeError(f"{sq['type']} squadron flies {', '.join(sq['missions'])}, not {mission}.")
     if profile not in PROFILES:
@@ -968,6 +1118,30 @@ def ground_sites(c: Campaign, f: dict, ambient: list[dict]) -> list[dict]:
              "strength": by_id[i].get("strength", 1.0)} for i in chosen]
 
 
+def _group_site_changes(changes: list[str], side: str) -> list[str]:
+    """'Destroyed a SAM site near Kish', 'Lost part of the garrison near X (3/4 left)'... as one
+    phrase per airfield: 'destroyed 2 and damaged 1 enemy positions near Kish Intl'."""
+    import re as _re
+    out, per = [], {}
+    for ch in changes:
+        if side == "red":
+            m = _re.match(r"(Destroyed|Damaged) .* near (.+?)(?: \(\d+/\d+ left\))?\.$", ch)
+        else:
+            m = _re.match(r"(Lost part of|Lost) .* near (.+?)(?: \(\d+/\d+ left\))?\.$", ch)
+        if m:
+            verb = "damaged" if m.group(1) in ("Damaged", "Lost part of") else ("destroyed" if side == "red" else "lost")
+            per.setdefault(m.group(2), {}).setdefault(verb, 0)
+            per[m.group(2)][verb] += 1
+        elif ("Friendly" in ch) == (side == "blue") and "captured" in ch or (side == "blue" and "campaign is" in ch):
+            out.append(ch.rstrip(".")[0].lower() + ch.rstrip(".")[1:])
+    who = "enemy" if side == "red" else "friendly"
+    for zone, verbs in per.items():
+        bits = [f"{verb} {n}" for verb, n in verbs.items()]
+        total = sum(verbs.values())
+        out.append(f"{' and '.join(bits)} {who} position{'s' if total > 1 else ''} near {zone}")
+    return out
+
+
 def _route_from(c: Campaign, f: dict, xy, t: float, fuel: float) -> None:
     """Rebuild an airborne flight's route from where DCS left it at time t: a CAP with time
     and fuel left goes back to its station and finishes its orbit; everyone else goes home."""
@@ -1012,7 +1186,7 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
             f["flown"], f["resolved"], f["player"] = True, True, False
             f["result"] = "flown in DCS" + (f"; lost {n}" if n else "")
         if n:
-            n = _lose(c, f, n, w["clock"])
+            n = _lose(c, f, n, w["clock"], pilots=False)
             if f["side"] == "blue":
                 friendly_lost += n
             else:
@@ -1039,12 +1213,12 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
         if not f or f["status"] not in ("airborne", "planned") or f["count"] <= 0:
             continue
         f["dcs_until"] = end_t
-        if f["mission"] != "CAP" and not f.get("resolved"):
+        if f["mission"] not in ("CAP", "CSAR") and not f.get("resolved"):  # rescues are settled by the engine
             f["resolved"] = True
             f["result"] = f.get("result") or "flown by the AI in DCS"
         missing = f["count"] - alive
         if missing > 0:  # deaths DCS didn't report as events
-            lost_now = _lose(c, f, missing, end_t)
+            lost_now = _lose(c, f, missing, end_t, pilots=False)
             if f["side"] == "blue":
                 friendly_lost += lost_now
             else:
@@ -1062,18 +1236,58 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
             f["fuel"] = fuel
             _route_from(c, f, (x, y), end_t, fuel)
             carried_on += 1
+    # Pilots who ejected in DCS are on the ground where they came down.
+    flight_of = {f["id"]: f for f in w["flights"]}
+    for unit, et, ex, ey in report.get("ejects") or []:
+        fid = unit.split(":")[1] if unit.startswith("MBF:") else None
+        f = flight_of.get(fid)
+        if f:
+            add_pilot(c, f, ex, ey, began + et)
+    # What each flight that was in the mission did, from DCS's kill and shot reports.
+    callsign = {f["id"]: f for f in w["flights"]}
+    sites = {s["id"]: s for s in c.data["sites"]}
+    kills_by: dict[str, list[str]] = {}
+    for victim, killer in report.get("kills") or []:
+        fid = killer.split(":")[1]
+        if victim.startswith("MB:"):
+            s_ = sites.get(victim.split(":")[1])
+            what = f"{_role_name(s_).split(' ', 1)[1]} unit near {s_['zone']}" if s_ else "ground unit"
+        else:
+            g = callsign.get(victim.split(":")[1])
+            what = f"a {g['type']} of {g['callsign']}" if g else "an aircraft"
+        kills_by.setdefault(fid, []).append(what)
+    shots = report.get("shots") or {}
+    for fid in (report.get("pos") or {}):
+        f = callsign.get(fid)
+        if not f:
+            continue
+        kills = kills_by.get(fid, [])
+        fired = shots.get(fid, 0)
+        if not kills and not fired and (f["mission"] in ("CAP", "CSAR") or f.get("tot", end_t) < began):
+            continue   # nothing to report, or its attack was over before the mission began
+        bits = []
+        if f["mission"] != "CAP" or fired:
+            bits.append(f"released {fired} weapon{'s' if fired != 1 else ''}" if fired else "released no weapons")
+        if kills:
+            counted: dict[str, int] = {}
+            for k in kills:
+                counted[k] = counted.get(k, 0) + 1
+            bits.append("killed " + ", ".join(f"{n}x {k}" if n > 1 else k for k, n in counted.items()))
+        elif f["mission"] in ("Strike", "SEAD", "CAS"):
+            bits.append("no hits recorded")
+        f["result"] = "; ".join(bits)
+        c.log(f"{clock_label(c, end_t)} · In DCS: {f['callsign']} ({f['start_count']}x {f['type']}, {f['mission']}): "
+              + "; ".join(bits) + ".", f["mission"], f["type"], side=f["side"], t=end_t)
     # The war moves on by the time you spent in the mission (it stays paused).
     if flown and w["clock"] < end_t:
         advance(c, end_t)
     parts = []
     if enemy_lost:
         parts.append(f"{enemy_lost} enemy aircraft shot down")
-    ground = [x for x in (changes or []) if not x.startswith("Lost")]
-    lost_ground = [x for x in (changes or []) if x.startswith("Lost")]
-    parts += [x[0].lower() + x[1:].rstrip(".") for x in ground]
+    parts += _group_site_changes(changes or [], "red")
     if friendly_lost:
         parts.append(f"{friendly_lost} friendly aircraft lost")
-    parts += [x[0].lower() + x[1:].rstrip(".") for x in lost_ground]
+    parts += _group_site_changes(changes or [], "blue")
     parts += landed_away
     if carried_on:
         parts.append(f"{carried_on} flight{'s carry' if carried_on > 1 else ' carries'} on from where DCS left {'them' if carried_on > 1 else 'it'}")
@@ -1084,9 +1298,6 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
                + ("; ".join(parts) if parts else "no losses either side") + ".")
     c.log(summary, "" if watched else mine["mission"], "" if watched else mine["type"], side="blue",
           t=w["clock"], sortie=sortie["id"], debrief=True)
-    if report.get("ejects"):
-        w.setdefault("ejections", []).extend(
-            {"unit": u, "t": began + t, "x": x, "y": y, "ll": c.ll(x, y)} for u, t, x, y in report["ejects"])
     return [summary]
 
 
@@ -1109,6 +1320,7 @@ def snapshot(c: Campaign) -> dict:
         "squadrons": [dict(sq, available=available(c, sq)) for sq in w["squadrons"]],
         "ai_only": sorted(AI_ONLY),
         "battles": w.get("battles", []),
+        "pilots": w.get("pilots", []),
         "flights": [{k: v for k, v in f.items() if k != "route"} |
                     {"route": [{"name": r["name"], "ll": r["ll"], "t": r["t"], "alt": r.get("alt")}
                                for r in f["route"]]}

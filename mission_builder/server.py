@@ -111,6 +111,8 @@ class State:
                 c.save()
             if c.ensure_airbase_defence():  # campaigns started before airbase air defence
                 c.save()
+            if "war" in c.data and war.migrate(c):
+                c.save()
         generator.SCENARIOS.clear()
         for theatre in self.campaigns:
             self.refresh_view(theatre)
@@ -294,7 +296,7 @@ class State:
                 if start["airborne"]:  # joining a flight in the air, where the map shows it
                     spec.start, spec.spawn_xy, spec.rtb = "In the air", start["xy"], start["past_target"]
                 ambient = war.ambient_flights(c, f["id"])
-                ground = war.ground_sites(c, f, ambient)
+                ground = war.ground_sites(c, f, ambient) + war.downed_pilots_ground(c)
                 try:
                     mission, briefing = g.build(spec, ambient, ground)
                 except g.NoParkingSlotError:
@@ -389,7 +391,7 @@ class State:
                                      weather=rng.choice(["Clear", "Clear", "Scattered clouds"]),
                                      enemy_skill="Good", seed=rng.randrange(1, 2**31))
                 ambient = war.ambient_flights(c, "")
-                ground = war.spectator_ground(c, ambient)
+                ground = war.spectator_ground(c, ambient) + war.downed_pilots_ground(c)
                 mission, briefing = g.build_spectator(spec, ambient, ground)
                 out_dir = Path(self.config["output_dir"])
                 out_dir.mkdir(parents=True, exist_ok=True)

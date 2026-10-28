@@ -643,21 +643,23 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             if wp["name"] == "LAND" and a["base"] in B.terrain.airports:
                 g.land_at(B.terrain.airports[a["base"]])
                 break
+            before = g.points[-1]  # the waypoint before this one (the spawn point for the first)
             w = g.add_waypoint(p, wp["alt"], wp["speed"] * 3.6, wp["name"])
             if wp["name"] == "STATION" and mission == "CAP":
                 w.tasks.append(task.EngageTargets(max_distance=60000, targets=[task.Targets.All.Air]))
-            elif wp["name"] == "TARGET":
-                # Strikers need an explicit attack order: engaging "anything nearby" left
-                # F-117s overflying their target without dropping.
+            elif wp["name"] == "TARGET" and a["mission"] != "CSAR":  # a rescue flies to its pilot, unarmed orders
+                # The attack order goes on the waypoint BEFORE the target: DCS starts a waypoint's
+                # tasks when the flight reaches it, so an order on the target waypoint comes too
+                # late to set up a run (B-52s, B-1Bs and F-117s overflew their targets and went home).
                 groups = B.site_groups.get(a.get("target") or "", [])
                 if groups:
                     for tg in groups:
-                        w.tasks.append(task.AttackGroup(tg.id))
+                        before.tasks.append(task.AttackGroup(tg.id))
                 elif a.get("target_xy"):
-                    w.tasks.append(task.Bombing(Point(a["target_xy"][0], a["target_xy"][1], B.terrain),
-                                                group_attack=True))
+                    before.tasks.append(task.Bombing(Point(a["target_xy"][0], a["target_xy"][1], B.terrain),
+                                                     group_attack=True))
                 if mission in ("SEAD", "CAS"):
-                    w.tasks.append(task.EngageTargets(
+                    before.tasks.append(task.EngageTargets(
                         max_distance=40000 if mission == "SEAD" else 15000,
                         targets=[task.Targets.All.GroundUnits.AirDefence if mission == "SEAD"
                                  else task.Targets.All.GroundUnits]))
@@ -728,6 +730,12 @@ def add_ground(B: "_Builder", sites: list[dict]) -> None:
     """The campaign map's ground forces around the player's route (see war.ground_sites), both
     sides, each unit named after its site so destroying it counts in the campaign."""
     for site in sites:
+        if site["role"] == "pilot":  # a downed pilot waiting for rescue: one soldier, not tracked
+            inf = vehicles.Infantry
+            B.m.vehicle_group(B.blue if site["side"] == "blue" else B.red, B.name(f"Downed pilot {site['id']}"),
+                              inf.Soldier_M4 if site["side"] == "blue" else inf.Infantry_AK,
+                              Point(site["x"], site["y"], B.terrain))
+            continue
         if (round(site["x"]), round(site["y"])) in B.used_sites:
             continue  # already placed by the mission itself
         B.used_sites.add((round(site["x"]), round(site["y"])))

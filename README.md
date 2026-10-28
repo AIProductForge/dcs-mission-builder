@@ -145,6 +145,18 @@ spirit of Falcon BMS's dynamic campaign:
     Caucasus and Syria; DeepSeek answers run up to about 19,000 tokens with its reasoning (about $0.002-0.013 an order in tests). The page shows the tokens, reasoning and OpenRouter cost after each answer.
 - **Night.** A time on target between 21:00 and 05:00 counts as night: enemy fighters are less
   effective, and the mission you fly starts at that hour.
+- **Downed pilots and rescue.** When an aircraft goes down, its crew may get out (about 70% of jet
+  crews and 40% of helicopter crews in the war's own losses; in a DCS mission, every ejection DCS
+  reports). Each downed pilot is a ⛑ marker on the map where they came down (the tooltip says
+  whose, since when, and which rescue flight is on the way). At each planning step both sides send
+  up to two rescue flights, a UH-60A (blue) or Mi-24V (red) pair from the nearest squadron in range
+  that lands at the pilot for 5 minutes, with two fighters on CAP over the pickup when any are free.
+  The odds depend on the enemy guns and fighters near the pilot (a CAP overhead helps); each pilot
+  gets two attempts. A pilot still down after 6 hours in enemy territory is captured; one in
+  friendly territory (nearest airfield is friendly) walks back after 2 hours. Rescue flights are
+  always settled by the war engine, even when they're in a mission you fly or watch; the pilots
+  waiting for rescue are placed in that mission as a lone soldier where they came down. You can't
+  frag a rescue by hand.
 
 Left alone, the war moves slowly and not always your way; your sorties are what tip it.
 
@@ -156,7 +168,11 @@ were in it land where DCS landed them or carry on from where DCS left them (a CA
 fuel left returns to its station; others head home), the engine doesn't roll dice for them inside
 that window, and damaged sites keep a strength (counted at that strength in the odds and placed
 with their surviving units in the next mission) until repaired. If DCS crashes before the end,
-the last position report closes the window. See .
+the last position report closes the window. The mission also reports which campaign flight killed
+what and how many weapons each flight released, so the "Back from DCS" debrief gets a line per
+flight that was in it ("CHEVY 3 (2x FA-18C_hornet, CAS): released 8 weapons; killed 2x airfield
+garrison unit near Qeshm Island", or "released no weapons; no hits recorded"), and site changes are
+combined per airfield. See [docs/handoff-design.md](docs/handoff-design.md).
 
 **Results from DCS.** Saved missions log each kill of a tracked unit to
 `Saved Games\DCS\Logs\dcs.log` (a mission-start script using `env.info`, which works in a
