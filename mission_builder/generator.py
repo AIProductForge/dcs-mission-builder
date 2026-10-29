@@ -667,15 +667,20 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
                 # It's Bombing on the target's position, not AttackGroup: in a side-by-side test in
                 # DCS (2026-10-28) F-117s with GBU-27 and B-52s with AGM-86 released nothing on
                 # AttackGroup and hit with Bombing (the B-52s fired from 300 km out).
+                # One aimpoint per key unit: a unitary warhead kills what it lands on, so 40 AGM-86s
+                # on one point killed one tank of seven (test C). A site's first units are the ones
+                # it can't work without (systems.py: radars first). Heavy bombers put four weapons
+                # on each aimpoint, others one; Auto made each B-52 fire a single missile.
                 groups = B.site_groups.get(a.get("target") or "", [])
-                if groups:   # the site's first unit: its radar, for a SAM site
-                    aim = groups[0].units[0].position
+                if groups:
+                    aims = [u.position for u in groups[0].units[:AIMPOINTS]]
                 elif a.get("target_xy"):
-                    aim = Point(a["target_xy"][0], a["target_xy"][1], B.terrain)
+                    aims = [Point(a["target_xy"][0], a["target_xy"][1], B.terrain)]
                 else:
-                    aim = None
-                if aim is not None:
-                    before.tasks.append(task.Bombing(Point(aim.x, aim.y, B.terrain), group_attack=True))
+                    aims = []
+                expend = task.Expend.Four if a["type"] in HEAVY_BOMBERS else task.Expend.One
+                for aim in aims:
+                    before.tasks.append(task.Bombing(Point(aim.x, aim.y, B.terrain), expend=expend, group_attack=True))
                 if mission in ("SEAD", "CAS"):
                     before.tasks.append(task.EngageTargets(
                         max_distance=40000 if mission == "SEAD" else 15000,
@@ -724,6 +729,8 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
 # pydcs's default): a 150 m low-level leg or a 120 m helicopter leg would otherwise be routed
 # into any terrain higher than that.
 AGL_BELOW = 500
+AIMPOINTS = 3                       # key units a strike flight aims at (radars first on a SAM site)
+HEAVY_BOMBERS = {"B-52H", "B-1B", "Tu-95MS", "Tu-160", "Tu-22M3"}
 
 
 def _follow_terrain(group) -> None:

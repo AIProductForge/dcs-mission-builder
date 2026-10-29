@@ -252,7 +252,10 @@ def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float,
         pts.append(("EXTRACT", lz, speed))
         waits[len(pts) - 1] = SOF_ON_GROUND / 2
     elif profile == "standoff":
-        launch = _toward(target, base, standoff) if _dist(base, target) > standoff else base
+        # A target nearer than the weapon's reach: release once clear of the base (a release point
+        # on the base itself shares the takeoff time, and the mission drops it with its orders).
+        d = _dist(base, target)
+        launch = _toward(target, base, standoff) if d > standoff else _toward(base, target, min(30_000, d / 2))
         pts.append(("TARGET", launch, speed))  # weapons release point
         marks["tot"] = len(pts) - 1
         pts.append(("EGRESS", _side_step(target, launch, 20_000), speed))
