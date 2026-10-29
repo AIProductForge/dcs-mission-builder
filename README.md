@@ -163,9 +163,11 @@ spirit of Falcon BMS's dynamic campaign:
   (`HEAVY_DEFENCE`, `STANDOFF_HIT`, `STANDOFF_DEFENCE`, `AI_BOMBERS`).
 - **Red's missile force.** Red relies on missiles and drones more than air strikes: 24 launch
   sites spread through red territory (`war.MISSILE_SITES`) fire salvos at blue airfields through
-  the day, up to 50 a day (`MISSILES_PER_DAY`), and never run out. They are shared evenly between
-  red's airfield zones (moved when a campaign from before is loaded). The mix: ballistic missiles
-  (Fateh-110, Zolfaghar; 40%), hypersonic (Fattah; 10%), cruise missiles (Hoveyzeh, Paveh; 20%)
+  the day, up to 50 a day (`MISSILES_PER_DAY`), and never run out. Ballistic and hypersonic launchers are deep
+  inside red territory (the deepest third of red's positions, farthest from blue's airfields); cruise
+  missile and drone sites are shared evenly between red's airfield zones (older campaigns' launch
+  sites are moved when loaded). The mix: ballistic missiles
+  (Zolfaghar, Emad, Kheibar Shekan; 40%), hypersonic (Fattah; 10%), cruise missiles (Hoveyzeh, Paveh; 20%)
   and Shahed-136 attack drones (30%). Each is shot down by the blue air defence covering its
   target with that type's chance per site (Hawks and Vulcans stop drones and cruise missiles far
   more often than ballistic missiles; almost nothing stops a hypersonic one), and one that gets

@@ -113,11 +113,13 @@ LONG_STANDOFF = {"AGM-86": 400_000, "AGM-158": 250_000, "Kh-59": 150_000, "AGM-1
 # Estimates: Hawks and Vulcans stop slow drones and cruise missiles far better than ballistic ones,
 # and next to nothing stops a hypersonic missile.
 MISSILE_SITES = 24
+MISSILE_LAYOUT = 3              # bump when the placement rule changes: older campaigns' launch sites are moved
+DEEP_MISSILES = {"ballistic", "hypersonic"}   # launched from deep inside red territory
 MISSILES_PER_DAY = 50
 SALVO_CHANCE = 0.35             # per planning step (every PLAN_EVERY), while the day's budget lasts
 MISSILE_TYPES = {
-    "ballistic": {"label": "ballistic missile (Fateh-110, Zolfaghar)", "share": 0.4,
-                  "system": "Ballistic missile battery", "reach": 750_000, "hit": 0.35,
+    "ballistic": {"label": "ballistic missile (Zolfaghar, Emad, Kheibar Shekan)", "share": 0.4,
+                  "system": "Ballistic missile battery", "reach": 1_500_000, "hit": 0.35,
                   "intercept": {"sam": 0.12}},
     "hypersonic": {"label": "hypersonic missile (Fattah)", "share": 0.1,
                    "system": "Ballistic missile battery", "reach": 1_400_000, "hit": 0.5,
@@ -491,25 +493,68 @@ def _plan_heavy(c: Campaign, side: str, site: dict, lo: float, hi: float, target
 
 def ensure_missile_force(c: Campaign, rng: random.Random | None = None) -> bool:
     """Red's missile launch sites, if the war doesn't have them yet: MISSILE_SITES of them by type
-    share, spread through red territory (next to red sites and airfield garrisons, which are on
-    land, and as far apart as possible). Returns True if any were added."""
+    share, next to red sites and airfield garrisons (which are on land). Ballistic and hypersonic
+    launchers are deep inside red territory (the deepest third of red's positions, farthest from
+    blue's airfields: they have the range); cruise missile and drone sites are shared evenly
+    between red's airfield zones. Older layouts are moved. Returns True if anything changed."""
     w = _war(c)
     existing = [s for s in c.data["sites"] if s.get("missile_type")]
-    if not c.fields_of("red") or (existing and w.get("missile_layout") == 2):
+    if not c.fields_of("red") or (existing and w.get("missile_layout") == MISSILE_LAYOUT):
         return False
     rng = rng or random.Random(7)
-    spots = _missile_spots(c, MISSILE_SITES)
-    if existing:   # placed before they were spread per airfield: move the ones still standing
-        for site, (x, y, zone) in zip([s for s in existing if s["alive"]], spots):
-            site.update(x=x, y=y, ll=c.ll(x, y), zone=zone)
+    if existing:   # placed under an older layout: move the ones still standing, keeping their types
+        sites = [s for s in existing if s["alive"]]
+        kinds = [s["missile_type"] for s in sites]
     else:
         kinds = [k for k, m in MISSILE_TYPES.items() for _ in range(round(m["share"] * MISSILE_SITES))]
         rng.shuffle(kinds)
-        for kind, (x, y, zone) in zip(kinds, spots):
+        sites = [None] * len(kinds)
+    deep_kinds = [k for k in kinds if k in DEEP_MISSILES]
+    deep = iter(_deep_missile_spots(c, len(deep_kinds)))
+    spread = iter(_missile_spots(c, len(kinds) - len(deep_kinds)))
+    for site, kind in zip(sites, kinds):
+        x, y, zone = next(deep) if kind in DEEP_MISSILES else next(spread)
+        if site:
+            site.update(x=x, y=y, ll=c.ll(x, y), zone=zone)
+        else:
             site = c.add_site("red", "missile", x, y, zone)
             site["system"], site["missile_type"] = MISSILE_TYPES[kind]["system"], kind
-    w["missile_layout"] = 2
+    w["missile_layout"] = MISSILE_LAYOUT
     return True
+
+
+def _red_anchors(c: Campaign, field: str | None = None) -> list[tuple[float, float]]:
+    """Land positions in red territory: red sites (not launch sites) and airfield garrison spots."""
+    fields = [field] if field else c.fields_of("red")
+    anchors = [(s["x"], s["y"]) for s in c.data["sites"] if s["side"] == "red" and s["zone"] in fields
+               and not s.get("missile_type")]
+    anchors += [tuple(p) for f in fields for p in c.data["garrison_pos"][f]]
+    return list(dict.fromkeys(anchors))   # several sites can share a position
+
+
+def _spread(anchors: list, first) -> list:
+    """Anchors in an order that keeps each next one as far as possible from those before it."""
+    picked = [first]
+    while len(picked) < len(anchors):
+        picked.append(max((a for a in anchors if a not in picked), key=lambda a: min(_dist(a, p) for p in picked)))
+    return picked
+
+
+def _deep_missile_spots(c: Campaign, n: int, rng: random.Random | None = None) -> list[tuple[float, float, str]]:
+    """n launch positions in the deepest third of red's positions (farthest from blue's airfields), spread apart."""
+    rng = rng or random.Random(11)
+    blue = [c.data["field_pos"][f] for f in c.fields_of("blue")] or [[0, 0]]
+    depth = lambda a: min(_dist(a, b) for b in blue)   # noqa: E731
+    anchors = sorted(_red_anchors(c), key=depth, reverse=True)
+    anchors = anchors[:max(n, len(anchors) // 3)]
+    out = []
+    for x, y in _spread(anchors, anchors[0])[:n]:
+        bx, by = x + rng.uniform(-800, 800), y + rng.uniform(-800, 800)
+        out.append((bx, by, min(c.fields_of("red"), key=lambda f: _dist(c.data["field_pos"][f], (bx, by)))))
+    while len(out) < n:   # fewer positions than launchers: double up
+        x, y, zone = out[len(out) % max(1, len(out))]
+        out.append((x + rng.uniform(-1500, 1500), y + rng.uniform(-1500, 1500), zone))
+    return out
 
 
 def _missile_spots(c: Campaign, n: int, rng: random.Random | None = None) -> list[tuple[float, float, str]]:
@@ -519,15 +564,9 @@ def _missile_spots(c: Campaign, n: int, rng: random.Random | None = None) -> lis
     rng = rng or random.Random(7)
     per_zone = {}
     for field in c.fields_of("red"):
-        anchors = [(s["x"], s["y"]) for s in c.data["sites"] if s["side"] == "red" and s["zone"] == field
-                   and not s.get("missile_type")]
-        anchors += [tuple(p) for p in c.data["garrison_pos"][field]]
-        anchors = list(dict.fromkeys(anchors))   # several sites can share a position
+        anchors = _red_anchors(c, field)
         fxy = c.data["field_pos"][field]
-        picked = [max(anchors, key=lambda a: _dist(a, fxy))]   # away from the airfield itself first
-        while len(picked) < len(anchors):
-            picked.append(max((a for a in anchors if a not in picked), key=lambda a: min(_dist(a, p) for p in picked)))
-        per_zone[field] = picked
+        per_zone[field] = _spread(anchors, max(anchors, key=lambda a: _dist(a, fxy)))   # away from the airfield first
     out, i = [], 0
     while len(out) < n and any(per_zone.values()):
         field = list(per_zone)[i % len(per_zone)]
