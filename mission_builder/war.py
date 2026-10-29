@@ -113,7 +113,8 @@ LONG_STANDOFF = {"AGM-86": 400_000, "AGM-158": 250_000, "Kh-59": 150_000, "AGM-1
 # Estimates: Hawks and Vulcans stop slow drones and cruise missiles far better than ballistic ones,
 # and next to nothing stops a hypersonic missile.
 MISSILE_SITES = 24
-MISSILE_LAYOUT = 3              # bump when the placement rule changes: older campaigns' launch sites are moved
+DEEP_NEAR_FIELD = 80_000        # deep launchers are within this of a red airfield (inland bases)
+MISSILE_LAYOUT = 4              # bump when the placement rule changes: older campaigns' launch sites are moved
 DEEP_MISSILES = {"ballistic", "hypersonic"}   # launched from deep inside red territory
 MISSILES_PER_DAY = 50
 SALVO_CHANCE = 0.35             # per planning step (every PLAN_EVERY), while the day's budget lasts
@@ -544,11 +545,15 @@ def _spread(anchors: list, first) -> list:
 
 
 def _deep_missile_spots(c: Campaign, n: int, rng: random.Random | None = None) -> list[tuple[float, float, str]]:
-    """n launch positions in the deepest third of red's positions (farthest from blue's airfields), spread apart."""
+    """n launch positions in the deepest third of red's positions (farthest from blue's airfields), spread apart.
+    Only positions within DEEP_NEAR_FIELD of a red airfield count: a zone's sites can be far from its
+    airfield (the Shiraz zone reaches the coast at Bushehr), and the coast isn't deep."""
     rng = rng or random.Random(11)
     blue = [c.data["field_pos"][f] for f in c.fields_of("blue")] or [[0, 0]]
+    red = [c.data["field_pos"][f] for f in c.fields_of("red")]
     depth = lambda a: min(_dist(a, b) for b in blue)   # noqa: E731
-    anchors = sorted(_red_anchors(c), key=depth, reverse=True)
+    anchors = [a for a in _red_anchors(c) if min(_dist(a, r) for r in red) <= DEEP_NEAR_FIELD] or _red_anchors(c)
+    anchors = sorted(anchors, key=depth, reverse=True)
     anchors = anchors[:max(n, len(anchors) // 3)]
     out = []
     for x, y in _spread(anchors, anchors[0])[:n]:
@@ -1433,7 +1438,12 @@ def spectator_ground(c: Campaign, ambient: list[dict], limit: int = 120) -> list
                                                "strength": site.get("strength", 1.0), "system": site.get("system")})
         if len(picked) >= limit:
             break
-    return list(picked.values())[:limit]
+    out = list(picked.values())[:limit]
+    for s in c.alive_sites("red"):   # red's missile force is always in the mission, wherever it is
+        if s.get("missile_type") and s["id"] not in picked:
+            out.append({**{k: s[k] for k in ("id", "side", "role", "x", "y", "zone")},
+                        "strength": s.get("strength", 1.0), "system": s.get("system")})
+    return out
 
 
 def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[dict]:
@@ -1518,6 +1528,8 @@ def ground_sites(c: Campaign, f: dict, ambient: list[dict]) -> list[dict]:
     if f.get("target"):
         wanted.pop(f["target"], None)  # the generator builds the player's own target
     chosen = sorted(wanted, key=wanted.get)[:MAX_GROUND_SITES]
+    chosen += [s["id"] for s in c.alive_sites("red") if s.get("missile_type") and s["id"] not in chosen
+               and s["id"] != f.get("target")]   # red's missile force is always in the mission, wherever it is
     by_id = {s["id"]: s for s in c.data["sites"]}
     return [{**{k: by_id[i][k] for k in ("id", "side", "role", "x", "y", "zone")},
              "strength": by_id[i].get("strength", 1.0), "system": by_id[i].get("system")} for i in chosen]
