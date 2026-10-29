@@ -406,6 +406,13 @@ function renderSelected() {
     $("sel-stores").querySelector("b").textContent = `Loadout ${f.loadout.replace(/^Liberation\s+/i, "")}:`;
     $("sel-stores").append(f.stores && f.stores.length ? `${f.stores.join(", ")} (each aircraft).` : "guns only.");
   }
+  if (f.aimpoints) {   // weaponeering: which weapon on which unit of the target, and how many
+    const p = document.createElement("div");
+    p.className = "aimpoints";
+    p.innerHTML = "<b>Aimpoints:</b> ";
+    p.append(f.aimpoints + ".");
+    $("sel-stores").append(p);
+  }
   const open = f.side === "blue" && f.status === "planned" && t < f.takeoff && S.snap.mode === "running";
   // A friendly flight in the air can be joined now, where it is (not when it's about to land).
   const joinable = f.side === "blue" && f.status === "airborne" && !f.player && f.count > 0 && inAir(f, t) &&

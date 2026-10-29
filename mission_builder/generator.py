@@ -33,7 +33,7 @@ from dcs.triggers import TriggerOnce, TriggerStart
 from dcs.unit import Skill
 
 from .inventory import TERRAINS
-from . import campaign, systems
+from . import campaign, systems, weaponeering
 from .scenarios import Scenario
 
 START_TYPES = {
@@ -411,6 +411,7 @@ class Briefing:
     notes: list = field(default_factory=list)
     sortie: str = ""                                     # campaign sortie id, reported back in dcs.log
     tracked: dict = field(default_factory=dict)          # enemy site id -> units placed on it
+    radars: dict = field(default_factory=dict)           # site id -> names of its radar units (a SAM is out without them)
     front: list = field(default_factory=list)            # airfields with their owner, for the map
 
     def to_dict(self) -> dict:
@@ -544,6 +545,8 @@ class _Builder:
             unit.name = f"MB:{site}:{self.n}:{len(self.tracked_units) + 1}"
             self.tracked_units.append(unit.name)
             self.b.tracked[site] = self.b.tracked.get(site, 0) + 1
+            if weaponeering.target_class(unit.type) == "radar":
+                self.b.radars.setdefault(site, []).append(unit.name)
 
     def ground(self, label: str, types, pos: Point, country=None, late=False, spread=60, site=None):
         country = country or self.red
@@ -667,20 +670,20 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
                 # It's Bombing on the target's position, not AttackGroup: in a side-by-side test in
                 # DCS (2026-10-28) F-117s with GBU-27 and B-52s with AGM-86 released nothing on
                 # AttackGroup and hit with Bombing (the B-52s fired from 300 km out).
-                # One aimpoint per key unit: a unitary warhead kills what it lands on, so 40 AGM-86s
-                # on one point killed one tank of seven (test C). A site's first units are the ones
-                # it can't work without (systems.py: radars first). Heavy bombers put four weapons
-                # on each aimpoint, others one; Auto made each B-52 fire a single missile.
+                # Weaponeering (weaponeering.py): which weapon on which unit, and how many, from what
+                # the flight carries; radars first on a SAM site. One Bombing order per aimpoint with
+                # the weapon category and expend set: on Auto a B-52 fired one AGM-86 (test C), and
+                # 40 on one point killed one tank of seven, so each unit gets its own aimpoint.
                 groups = B.site_groups.get(a.get("target") or "", [])
-                if groups:
-                    aims = [u.position for u in groups[0].units[:AIMPOINTS]]
-                elif a.get("target_xy"):
-                    aims = [Point(a["target_xy"][0], a["target_xy"][1], B.terrain)]
-                else:
-                    aims = []
-                expend = task.Expend.Four if a["type"] in HEAVY_BOMBERS else task.Expend.One
-                for aim in aims:
-                    before.tasks.append(task.Bombing(Point(aim.x, aim.y, B.terrain), expend=expend, group_attack=True))
+                units = [u for g_ in groups for u in g_.units]
+                plan = weaponeering.weaponeer(stores, len(g.units), [u.type for u in units]) if units else []
+                for aim in plan:
+                    pos = units[aim["unit"]].position
+                    before.tasks.append(task.Bombing(Point(pos.x, pos.y, B.terrain), weapon_type=task.WeaponType[aim["category"]],
+                                                     expend=task.Expend[aim["expend"]], group_attack=True))
+                if not plan and (units or a.get("target_xy")):   # nothing weaponeered: the site's first unit, DCS's choice
+                    pos = units[0].position if units else Point(a["target_xy"][0], a["target_xy"][1], B.terrain)
+                    before.tasks.append(task.Bombing(Point(pos.x, pos.y, B.terrain), group_attack=True))
                 if mission in ("SEAD", "CAS"):
                     before.tasks.append(task.EngageTargets(
                         max_distance=40000 if mission == "SEAD" else 15000,
@@ -729,8 +732,6 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
 # pydcs's default): a 150 m low-level leg or a 120 m helicopter leg would otherwise be routed
 # into any terrain higher than that.
 AGL_BELOW = 500
-AIMPOINTS = 3                       # key units a strike flight aims at (radars first on a SAM site)
-HEAVY_BOMBERS = {"B-52H", "B-1B", "Tu-95MS", "Tu-160", "Tu-22M3"}
 
 
 def _follow_terrain(group) -> None:

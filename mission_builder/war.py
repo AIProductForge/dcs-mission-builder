@@ -18,7 +18,8 @@ import math
 import random
 
 from .campaign import Campaign, _dist, _role_name, other
-from .systems import WEIGHT, site_ranges, system_for
+from . import weaponeering
+from .systems import SYSTEMS, WEIGHT, site_ranges, system_for, units_for
 
 START = "2010-06-01T06:00:00"      # local time on the map when a war begins
 SQUADRON_SIZE = 12
@@ -92,8 +93,12 @@ NIGHT_HOURS = (21, 5)       # local time-on-target from 21:00 to 05:00 counts as
 # stand-off missiles in numbers (saturation), or ballistic missiles, and goes after the SAM that
 # covers a target before the target itself. Below this, ordinary packages as before.
 HEAVY_DEFENCE = 1.5
+# The chance an AI flight actually attacks a weaponeered aimpoint as planned (finds it, gets
+# there, releases); the war's odds only, not the mission. Set so a lightly defended pair's strike
+# succeeds about as often as before weaponeering (~65%).
+DELIVERY = 0.6
 AI_BOMBERS = True             # may the planner use blue's bombers (else they fly only what you frag)
-MIN_PACKAGE_HIT = 0.25
+MIN_PACKAGE_HIT = 0.15
 STANDOFF_HIT = 0.45             # per pair of stand-off shooters (a heavy bomber counts as two), undefended
 STANDOFF_DEFENCE = 0.5          # ...divided by 1 + this x the air defence over the target, which shoots weapons down
 # Turnaround: an aircraft flies again this long after landing (fuel, arming, crew rest).
@@ -330,6 +335,10 @@ def _new_flight(c: Campaign, sq: dict, mission: str, count: int, takeoff: float,
     if profile == "standoff":
         f["launch_xy"] = [f["route"][[r["name"] for r in route].index("TARGET")][k] for k in ("x", "y")]
     _arm_flight(f, loadout)
+    if target_site and f.get("stores"):   # what it will put on which unit, for the ATO
+        units = site_units(next(s for s in c.data["sites"] if s["id"] == target_site))
+        plan = weaponeering.weaponeer(f["stores"], count, units)
+        f["aimpoints"] = weaponeering.describe(plan, units) or "nothing on board suits this target"
     if commit:
         w["flights"].append(f)
     else:
@@ -689,6 +698,32 @@ def _who(f: dict) -> str:
     return f"{f['callsign']} ({f['count']}x {f['type']}, {f['mission']})"
 
 
+def site_units(site: dict) -> list[str]:
+    """The DCS unit types a mission places on a site (as systems.py places them), for weaponeering."""
+    system = site.get("system") or system_for(site["side"], site["role"])
+    if system in SYSTEMS:
+        return [u.id for u in units_for(system, site.get("strength", 1.0))]
+    return ["Workshop A", "Workshop A"]   # installations and forward bases: two structures
+
+
+def _weaponeered(c: Campaign, f: dict, t: float, gone, count: int):
+    """(chance the target is destroyed, chance each aircraft is lost, aimpoints) from the flight's
+    actual weapons against the units on its target (weaponeering.py), or None when the flight
+    has no stores on record or no target site."""
+    site = next((s for s in c.data["sites"] if s["id"] == f.get("target")), None)
+    if not site or not f.get("stores"):
+        return None
+    standoff = f.get("profile") == "standoff"
+    threat = _threat(c, f, f.get("launch_xy") if standoff and f.get("launch_xy") else f["target_xy"], t, gone)
+    units = site_units(site)
+    plan = weaponeering.weaponeer(f["stores"], count, units, defence=_ad_defence(c, f["side"], f["target_xy"], gone),
+                                  accuracy=1.0 if standoff else max(0.3, 1 - 0.08 * threat))
+    for a in plan:   # the AI doesn't always find, reach or release on its aimpoint
+        a["p_kill"] *= DELIVERY
+    p_hit = weaponeering.p_destroyed(plan, units, blind_counts=site["role"] in ("sam", "ewr"))
+    return p_hit, min(0.25, 0.01 + 0.02 * threat), plan
+
+
 def strike_odds(c: Campaign, f: dict, t: float, gone=frozenset(), count: int | None = None) -> tuple[float, float]:
     """(chance the target is destroyed, chance each aircraft is lost) for an attack flight."""
     count = f["count"] if count is None else count
@@ -696,6 +731,10 @@ def strike_odds(c: Campaign, f: dict, t: float, gone=frozenset(), count: int | N
     if profile == "sof" or f["mission"] == "SOF":
         threat = _threat(c, f, f["target_xy"], t, gone)
         return max(0.15, 0.7 - 0.1 * threat), min(0.3, 0.03 + 0.05 * threat)
+    w = _weaponeered(c, f, t, gone, count)
+    if w:
+        return w[0], w[1]
+    # No stores on record (tests without the server's loadouts): the old rule of thumb.
     if profile == "standoff":  # danger is at the release point; the weapons have to get through
         threat = _threat(c, f, f.get("launch_xy") or f["target_xy"], t, gone)
         # Saturation: each pair's weapons get through the defences over the target less often,
@@ -1467,6 +1506,11 @@ def snapshot(c: Campaign) -> dict:
     for f in w["flights"]:
         if "stores" not in f:
             _arm_flight(f)
+        if "aimpoints" not in f and f.get("target") and f.get("stores"):   # flights planned before weaponeering
+            site = next((s for s in c.data["sites"] if s["id"] == f["target"]), None)
+            if site:
+                units = site_units(site)
+                f["aimpoints"] = weaponeering.describe(weaponeering.weaponeer(f["stores"], f["start_count"], units), units)                     or "nothing on board suits this target"
     zones = {side: [{"field": n, **c.zone_status(n)} for n in c.fields_of(side)] for side in ("blue", "red")}
     return {
         "theatre": c.theatre, "scenario": c.data["scenario"], "start": w["start"], "clock": w["clock"],

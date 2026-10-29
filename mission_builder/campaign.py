@@ -273,10 +273,10 @@ class Campaign:
     # --- sorties -----------------------------------------------------------------------
 
     def register_sortie(self, sortie_id: str, file: str, mission_type: str, aircraft: str,
-                        tracked: dict[str, int], flight: str = "") -> None:
+                        tracked: dict[str, int], flight: str = "", radars: dict | None = None) -> None:
         self.data["sorties"].append({"id": sortie_id, "file": file, "mission": mission_type, "aircraft": aircraft,
                                      "saved": dt.datetime.now().isoformat(timespec="seconds"),
-                                     "status": "pending", "tracked": tracked, "flight": flight})
+                                     "status": "pending", "tracked": tracked, "flight": flight, "radars": radars or {}})
         self.save()
 
     def apply(self, sortie: dict, dead_units: set[str], source: str, hp: dict | None = None) -> list[str]:
@@ -291,7 +291,9 @@ class Campaign:
         changes = []
         for site_id, placed in sortie["tracked"].items():
             s = by_id.get(site_id)
-            if s and s["alive"] and killed.get(site_id, 0) >= max(1, math.ceil(placed * DESTROYED_SHARE)):
+            radars = (sortie.get("radars") or {}).get(site_id) or []
+            blind = s and s["role"] in ("sam", "ewr") and radars and all(r in dead_units for r in radars)
+            if s and s["alive"] and (blind or killed.get(site_id, 0) >= max(1, math.ceil(placed * DESTROYED_SHARE))):
                 s["alive"] = False
                 s.pop("strength", None)
                 changes.append(f"{'Destroyed' if s['side'] == 'red' else 'Lost'} {_role_name(s)} near {s['zone']}.")

@@ -161,6 +161,16 @@ spirit of Falcon BMS's dynamic campaign:
   the defences over the target shoot some down, so numbers win (a B-52 counts as two pairs of
   shooters). It sends nothing when no option has a 25% chance. Constants at the top of `war.py`
   (`HEAVY_DEFENCE`, `STANDOFF_HIT`, `STANDOFF_DEFENCE`, `AI_BOMBERS`).
+- **Weaponeering** (`mission_builder/weaponeering.py`). Each strike flight's weapons are matched
+  to the units of its target: units in priority order (on a SAM site its radars first, then
+  launchers with their own radar, then the rest), each gets the best weapon on board for that
+  kind of target (anti-radiation missiles only for radars), one per aircraft first so every key
+  unit is covered, then more on those still under an 80% chance of a kill, in DCS's 1/2/4 steps.
+  Missions get one bombing order per aimpoint with the weapon category and count set; the ATO
+  shows the aimpoints ("1x GBU-27 each on the S-300PS 64H6E sr (84%)"). The war's odds use the same
+  plan, with stand-off weapons shot down by the defences over the target and an AI delivery factor
+  (`DELIVERY`). A SAM site whose radars are all dead counts as destroyed. The kill chances are
+  estimates, calibrated where DCS tests gave a number (2026-10-28: GBU-27 and AGM-86 tests).
 - **Turnaround.** Aircraft fly again only after a turnaround: jets 4 hours, helicopters 2, the
   bombers 24 (so a bomber you frag may show as unavailable after the planner used it). The
   planner uses blue's bombers too (`AI_BOMBERS`).

@@ -247,7 +247,7 @@ class State:
             c = self.campaigns.get(spec.terrain)
             if c and briefing.sortie and not any(x["id"] == briefing.sortie for x in c.data["sorties"]):
                 c.register_sortie(briefing.sortie, str(path), briefing.mission_type, spec.aircraft, briefing.tracked,
-                                  flight=spec.flight)
+                                  flight=spec.flight, radars=briefing.radars)
             return {"path": str(path), "sortie": briefing.sortie}
 
     # --- the air war ------------------------------------------------------------------
@@ -399,7 +399,7 @@ class State:
                 path = out_dir / f"Watch_{theatre}_{war.clock_label(c).replace(' ', '_').replace(':', '')}.miz"
                 mission.save(str(path))
                 if briefing.sortie:
-                    c.register_sortie(briefing.sortie, str(path), "Spectate", "", briefing.tracked)
+                    c.register_sortie(briefing.sortie, str(path), "Spectate", "", briefing.tracked, radars=briefing.radars)
                     c.data["sorties"][-1]["began"] = began
             except Exception:
                 war.release_flight(c)
