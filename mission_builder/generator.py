@@ -663,15 +663,19 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
                 w.tasks.append(task.EngageTargets(max_distance=60000, targets=[task.Targets.All.Air]))
             elif wp["name"] == "TARGET" and a["mission"] != "CSAR":  # a rescue flies to its pilot, unarmed orders
                 # The attack order goes on the waypoint BEFORE the target: DCS starts a waypoint's
-                # tasks when the flight reaches it, so an order on the target waypoint comes too
-                # late to set up a run (B-52s, B-1Bs and F-117s overflew their targets and went home).
+                # tasks when the flight reaches it, so an order on the target waypoint comes too late.
+                # It's Bombing on the target's position, not AttackGroup: in a side-by-side test in
+                # DCS (2026-10-28) F-117s with GBU-27 and B-52s with AGM-86 released nothing on
+                # AttackGroup and hit with Bombing (the B-52s fired from 300 km out).
                 groups = B.site_groups.get(a.get("target") or "", [])
-                if groups:
-                    for tg in groups:
-                        before.tasks.append(task.AttackGroup(tg.id))
+                if groups:   # the site's first unit: its radar, for a SAM site
+                    aim = groups[0].units[0].position
                 elif a.get("target_xy"):
-                    before.tasks.append(task.Bombing(Point(a["target_xy"][0], a["target_xy"][1], B.terrain),
-                                                     group_attack=True))
+                    aim = Point(a["target_xy"][0], a["target_xy"][1], B.terrain)
+                else:
+                    aim = None
+                if aim is not None:
+                    before.tasks.append(task.Bombing(Point(aim.x, aim.y, B.terrain), group_attack=True))
                 if mission in ("SEAD", "CAS"):
                     before.tasks.append(task.EngageTargets(
                         max_distance=40000 if mission == "SEAD" else 15000,
