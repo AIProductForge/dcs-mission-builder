@@ -493,24 +493,49 @@ def ensure_missile_force(c: Campaign, rng: random.Random | None = None) -> bool:
     """Red's missile launch sites, if the war doesn't have them yet: MISSILE_SITES of them by type
     share, spread through red territory (next to red sites and airfield garrisons, which are on
     land, and as far apart as possible). Returns True if any were added."""
-    if any(s.get("missile_type") for s in c.data["sites"]) or not c.fields_of("red"):
+    w = _war(c)
+    existing = [s for s in c.data["sites"] if s.get("missile_type")]
+    if not c.fields_of("red") or (existing and w.get("missile_layout") == 2):
         return False
     rng = rng or random.Random(7)
-    blue = [c.data["field_pos"][n] for n in c.fields_of("blue")] or [[0, 0]]
-    anchors = [(s["x"], s["y"]) for s in c.data["sites"] if s["side"] == "red"]
-    anchors += [tuple(p) for n in c.fields_of("red") for p in c.data["garrison_pos"][n]]
-    anchors = [a for a in anchors if min(_dist(a, b) for b in blue) > 40_000] or anchors
-    picked = [max(anchors, key=lambda a: min(_dist(a, b) for b in blue))]   # deepest first
-    while len(picked) < min(MISSILE_SITES, len(anchors)):
-        picked.append(max(anchors, key=lambda a: min(_dist(a, p) for p in picked)))
-    kinds = [k for k, m in MISSILE_TYPES.items() for _ in range(round(m["share"] * MISSILE_SITES))]
-    for i, (x, y) in enumerate(picked):
-        kind = kinds[i % len(kinds)]
-        bx, by = x + rng.uniform(-800, 800), y + rng.uniform(-800, 800)
-        zone = min(c.fields_of("red"), key=lambda n: _dist(c.data["field_pos"][n], (bx, by)))
-        site = c.add_site("red", "missile", bx, by, zone)
-        site["system"], site["missile_type"] = MISSILE_TYPES[kind]["system"], kind
+    spots = _missile_spots(c, MISSILE_SITES)
+    if existing:   # placed before they were spread per airfield: move the ones still standing
+        for site, (x, y, zone) in zip([s for s in existing if s["alive"]], spots):
+            site.update(x=x, y=y, ll=c.ll(x, y), zone=zone)
+    else:
+        kinds = [k for k, m in MISSILE_TYPES.items() for _ in range(round(m["share"] * MISSILE_SITES))]
+        rng.shuffle(kinds)
+        for kind, (x, y, zone) in zip(kinds, spots):
+            site = c.add_site("red", "missile", x, y, zone)
+            site["system"], site["missile_type"] = MISSILE_TYPES[kind]["system"], kind
+    w["missile_layout"] = 2
     return True
+
+
+def _missile_spots(c: Campaign, n: int, rng: random.Random | None = None) -> list[tuple[float, float, str]]:
+    """n launch positions, an even share per red airfield zone, each next to one of that zone's
+    red sites or garrison spots (on land) and as far from the zone's other launch sites as
+    possible. Positions alternate between zones so any count spreads evenly."""
+    rng = rng or random.Random(7)
+    per_zone = {}
+    for field in c.fields_of("red"):
+        anchors = [(s["x"], s["y"]) for s in c.data["sites"] if s["side"] == "red" and s["zone"] == field
+                   and not s.get("missile_type")]
+        anchors += [tuple(p) for p in c.data["garrison_pos"][field]]
+        anchors = list(dict.fromkeys(anchors))   # several sites can share a position
+        fxy = c.data["field_pos"][field]
+        picked = [max(anchors, key=lambda a: _dist(a, fxy))]   # away from the airfield itself first
+        while len(picked) < len(anchors):
+            picked.append(max((a for a in anchors if a not in picked), key=lambda a: min(_dist(a, p) for p in picked)))
+        per_zone[field] = picked
+    out, i = [], 0
+    while len(out) < n and any(per_zone.values()):
+        field = list(per_zone)[i % len(per_zone)]
+        if per_zone[field]:
+            x, y = per_zone[field].pop(0)
+            out.append((x + rng.uniform(-800, 800), y + rng.uniform(-800, 800), field))
+        i += 1
+    return out
 
 
 def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
