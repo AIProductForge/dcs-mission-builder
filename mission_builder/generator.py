@@ -741,6 +741,72 @@ def _follow_terrain(group) -> None:
 
 
 
+def add_missiles(B: "_Builder", launches: list[dict]) -> None:
+    """Red's missile and drone strikes that fall in the mission (war.missile_launches), fired by
+    real DCS units at the campaign's times, so what the campaign map shows can be watched in DCS.
+    What test D (2026-10-28) showed DCS can do:
+      ballistic, hypersonic: a 9K720 Iskander launcher (Currenthill pack, in DCS's CoreMods; fires at a
+        point out to 400 km) at the firing point, told to fire at the campaign's launch time;
+      cruise: DCS has no ground launcher that hits land (the HY-2 didn't fire), so a Tu-95MS
+        (Kh-555, Currenthill pack) appears at the launch point at launch time, fires and turns back;
+      drone: a Wing Loong (stock) flies from the launch point and attacks the target with AKD-10s.
+    The launch time comes from a trigger that pushes a stored fire order (ground launchers) or
+    activates the aircraft; the pushed order is the one part not yet seen working in DCS (test E)."""
+    bombers: dict[tuple, list[dict]] = {}
+    for n, l_ in enumerate(launches):
+        start = Point(l_["start_xy"][0], l_["start_xy"][1], B.terrain)
+        aim = Point(l_["xy1"][0], l_["xy1"][1], B.terrain)
+        if l_["type"] in ("ballistic", "hypersonic"):
+            g = B.m.vehicle_group(B.red, B.name(f"Missile launcher {l_['salvo']}-{n}"), vehicles.MissilesSS.CHAP_9K720_HE,
+                                  start, heading=start.heading_between_point(aim), group_size=1)
+            g.add_trigger_action(task.FireAtPoint(Point(aim.x, aim.y, B.terrain), rounds=1, radius=100))
+            t = TriggerOnce(comment=f"Missile launch {l_['salvo']}-{n}")
+            t.add_condition(condition.TimeAfter(max(1, l_["delay"])))
+            t.add_action(action.AITaskPush(g.id, 1))
+            B.m.triggerrules.triggers.append(t)
+        elif l_["type"] == "cruise":
+            bombers.setdefault((l_["salvo"], l_["launcher"]), []).append(l_)
+        else:   # drone
+            ut = planes.WingLoong_I
+            g = B.m.flight_group_inflight(B.red, B.name(f"Attack drone {l_['salvo']}-{n}"), ut, start, 2500, 250,
+                                          maintask=_main_task(ut, "Strike"), group_size=1)
+            _arm(g, ut, "Strike", _main_task(ut, "Strike"), "CAS")
+            g.points[0].tasks.append(task.Bombing(Point(aim.x, aim.y, B.terrain), expend=task.Expend.One, group_attack=True))
+            g.add_waypoint(start, 2500, 250, "HOME")
+            _late(B, g, l_["delay"], f"Drone launch {l_['salvo']}-{n}")
+    for (salvo, _launcher), group in bombers.items():
+        first = group[0]
+        start = Point(first["start_xy"][0], first["start_xy"][1], B.terrain)
+        ut = planes.plane_map["Tu-95MS"]
+        g = B.m.flight_group_inflight(B.red, B.name(f"Cruise missile carrier {salvo}"), ut, start, 9000, 700,
+                                      maintask=_main_task(ut, "Strike"), group_size=1)
+        _arm(g, ut, "Strike", _main_task(ut, "Strike"), "STRIKE")
+        for l_ in group:
+            g.points[0].tasks.append(task.Bombing(Point(l_["xy1"][0], l_["xy1"][1], B.terrain), expend=task.Expend.One,
+                                                  group_attack=True))
+        aim = Point(first["xy1"][0], first["xy1"][1], B.terrain)
+        g.add_waypoint(start.point_from_heading(aim.heading_between_point(start), 80_000), 9000, 700, "HOME")
+        _late(B, g, min(l_["delay"] for l_ in group), f"Cruise missile launch {salvo}")
+    if launches:
+        kinds: dict[str, int] = {}
+        for l_ in launches:
+            kinds[l_["type"]] = kinds.get(l_["type"], 0) + 1
+        B.b.notes.append("Enemy missile and drone strikes during this mission: " + ", ".join(
+            f"{v} {k}" for k, v in kinds.items()) + ". Ballistic missiles are fired by Iskander launchers, cruise "
+            "missiles by a Tu-95MS stand-in, drones are Wing Loongs.")
+
+
+def _late(B: "_Builder", g, delay: float, comment: str) -> None:
+    """Activate an aircraft group `delay` seconds into the mission (at once if delay <= 0)."""
+    if delay <= 0:
+        return
+    g.late_activation = True
+    t = TriggerOnce(comment=comment)
+    t.add_condition(condition.TimeAfter(max(1, delay)))
+    t.add_action(action.ActivateGroup(g.id))
+    B.m.triggerrules.triggers.append(t)
+
+
 def add_ground(B: "_Builder", sites: list[dict]) -> None:
     """The campaign map's ground forces around the player's route (see war.ground_sites), both
     sides, each unit named after its site so destroying it counts in the campaign."""
@@ -778,7 +844,7 @@ def add_ground(B: "_Builder", sites: list[dict]) -> None:
 
 
 def build(spec: MissionSpec, ambient: list[dict] | None = None,
-          ground: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
+          ground: list[dict] | None = None, missiles: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
     """Build a mission. `ambient`: the campaign's other flights (see war.ambient_flights);
     `ground`: campaign sites to place around the route (see war.ground_sites)."""
     B = _Builder(spec)
@@ -1104,6 +1170,8 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
     if spec.spawn_xy:
         b.notes.append("You join this flight in the air, where the campaign map shows it."
                        + (" Its target is behind it: recover to base." if spec.rtb else ""))
+    if missiles:
+        add_missiles(B, missiles)
     if ambient:
         add_ambient(B, ambient)
         airborne = sum(1 for a in ambient if a["delay"] == 0)
@@ -1146,7 +1214,8 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
     return m, b
 
 
-def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict]) -> tuple[Mission, "Briefing"]:
+def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict],
+                    missiles: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
     """A mission with no player aircraft: the campaign's flights and ground forces as they are
     at spec's date and time. DCS opens it in spectator mode. Results come back like any other."""
     B = _Builder(spec)
@@ -1158,6 +1227,7 @@ def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict]) 
                        loadout="", stores=[], home={"name": home.name, **_ll(home.position)},
                        objective={"name": "", **_ll(home.position), "brg": 0, "dist_nm": 0}, enemy_field="")
     add_ground(B, ground)
+    add_missiles(B, missiles or [])
     add_ambient(B, ambient)
     if B.sc:
         for n in B.sc.blue_fields:

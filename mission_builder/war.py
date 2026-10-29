@@ -135,6 +135,11 @@ MISSILE_TYPES = {
 # Average speeds above are m/s over the whole flight (a Shahed at about 180 km/h takes over two
 # hours from deep inside Iran). A weapon's effect lands when it arrives.
 # What a salvo goes after on a blue airfield (weights): air defence first, to open the way.
+# In DCS (tested 2026-10-28, test D): the Iskander (9K720, Currenthill pack in DCS's CoreMods) fires
+# at a point out to its 400 km; the Scud and the HY-2 couldn't do the job (285 km; no land targets).
+# A ballistic or hypersonic launcher further than DCS_BALLISTIC_REACH from its target fires from a
+# dispersed firing point on the way (a TEL moved forward), which is where the map and DCS show it leave.
+DCS_BALLISTIC_REACH = 370_000
 MISSILE_SHOW = 15 * 60          # a finished weapon's end (shot down, hit, miss) stays on the map this long
 MISSILE_TARGET_WEIGHT = {"sam": 3.0, "ewr": 2.0, "shorad": 1.5}
 MISSION_FOR_ROLE = {"sam": "SEAD", "ewr": "SEAD", "structure": "Strike", "missile": "Strike",
@@ -623,6 +628,8 @@ def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
         kind = MISSILE_TYPES[kind_name]
         target = rng.choices(sites, [MISSILE_TARGET_WEIGHT.get(s["role"], 1.0) for s in sites])[0]
         a, b_ = (launcher["x"], launcher["y"]), (target["x"] + rng.uniform(-300, 300), target["y"] + rng.uniform(-300, 300))
+        if kind_name in DEEP_MISSILES and _dist(a, b_) > DCS_BALLISTIC_REACH:   # a TEL moved forward
+            a = _toward(b_, a, DCS_BALLISTIC_REACH * rng.uniform(0.85, 1.0))
         dist = _dist(a, b_)
         t0 = t + rng.uniform(0, 600)           # launches in the salvo spread over ten minutes
         shooters = [s for s in cover if rng.random() < kind["intercept"].get(s["role"], 0.0) * s.get("strength", 1.0)]
@@ -637,13 +644,67 @@ def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
         salvo["fired"][kind_name] = salvo["fired"].get(kind_name, 0) + 1
         salvo["left"] += 1
         flights.append({"salvo": salvo["id"], "type": kind_name, "target": target["id"], "fate": fate,
-                        "from": c.ll(*a), "to": c.ll(*b_), "end": c.ll(*end), "t0": round(t0, 1), "t1": round(t1, 1),
-                        "done": False})
+                        "launcher": launcher["id"], "from": c.ll(*a), "to": c.ll(*b_), "end": c.ll(*end),
+                        "xy0": [round(a[0]), round(a[1])], "xy1": [round(b_[0]), round(b_[1])],
+                        "t0": round(t0, 1), "t1": round(t1, 1), "done": False})
     if not salvo["left"]:
         return
     m["fired"] += salvo["left"]
     m["total"] = m.get("total", 0) + salvo["left"]
     w.setdefault("salvos", {})[str(salvo["id"])] = salvo
+
+
+def plan_missiles_ahead(c: Campaign, until: float, rng: random.Random | None = None) -> None:
+    """Plan red's salvos for the planning steps up to `until` now (they're fixed from then on), so
+    a mission built now can launch, in DCS, those that fall while it runs."""
+    w = _war(c)
+    rng = rng or random.Random()
+    t = w["next_plan"]
+    while t <= until:
+        if t > w.get("missiles_planned_until", -1):
+            missile_tick(c, t, rng)
+            w["missiles_planned_until"] = t
+        t += PLAN_EVERY
+
+
+def missile_launches(c: Campaign, horizon: float = 5400) -> list[dict]:
+    """Red's weapons a mission starting now should show: launched within `horizon` from now, plus
+    drones already on their way (placed in the air where they are). For generator.add_missiles."""
+    w = _war(c)
+    now = w["clock"]
+    plan_missiles_ahead(c, now + horizon)
+    out = []
+    for i, mf in enumerate(w.get("missile_flights", [])):
+        if mf["done"] or mf["t1"] <= now or "xy0" not in mf:
+            continue
+        if mf["t0"] >= now and mf["t0"] <= now + horizon:
+            out.append({**mf, "index": i, "delay": round(mf["t0"] - now), "start_xy": mf["xy0"]})
+        elif mf["t0"] < now and mf["type"] == "drone":   # on its way: in the air where it is now
+            k = (now - mf["t0"]) / max(1.0, mf["t1"] - mf["t0"])
+            xy = [mf["xy0"][j] + (mf["xy1"][j] - mf["xy0"][j]) * k for j in (0, 1)]
+            out.append({**mf, "index": i, "delay": 0, "start_xy": [round(xy[0]), round(xy[1])]})
+    return out
+
+
+def missile_target_ground(c: Campaign, launches: list[dict], ground: list[dict]) -> list[dict]:
+    """The blue sites these weapons are aimed at, for a mission that doesn't place them already."""
+    have = {g["id"] for g in ground}
+    out = []
+    for site in c.data["sites"]:
+        if site["alive"] and site["id"] not in have and any(l_["target"] == site["id"] for l_ in launches):
+            out.append({**{k: site[k] for k in ("id", "side", "role", "x", "y", "zone")},
+                        "strength": site.get("strength", 1.0), "system": site.get("system")})
+            have.add(site["id"])
+    return out
+
+
+def mark_missiles_in_dcs(c: Campaign, launches: list[dict], sortie_id: str) -> None:
+    """These weapons are in a DCS mission: while it is out, and for the time it ran, DCS decides
+    what they did (missile_arrives skips the engine's dice for them)."""
+    flights = _war(c).get("missile_flights", [])
+    for l_ in launches:
+        if l_["index"] < len(flights):
+            flights[l_["index"]]["in_dcs"] = sortie_id
 
 
 def missile_arrives(c: Campaign, mf: dict, rng: random.Random) -> None:
@@ -656,7 +717,9 @@ def missile_arrives(c: Campaign, mf: dict, rng: random.Random) -> None:
     t = mf["t1"]
     target = next((s for s in c.data["sites"] if s["id"] == mf["target"]), None)
     m = w["missiles"]
-    if mf["fate"] == "down":
+    if mf.get("dcs_flown"):   # flown in DCS: what it hit came back with the mission's results
+        mf["fate"] = "flown in DCS"
+    elif mf["fate"] == "down":
         salvo["down"] += 1
         m["down"] = m.get("down", 0) + 1
     elif target and target["alive"] and rng.random() < kind["hit"]:
@@ -1184,7 +1247,9 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
         changed = True
         if kind == "plan":
             pilots_tick(c, t)
-            missile_tick(c, t, rng)
+            if t > w.get("missiles_planned_until", -1):
+                missile_tick(c, t, rng)
+                w["missiles_planned_until"] = t
             plan(c, t, rng)
             plan_csar(c, t, rng)
             w["next_plan"] = t + PLAN_EVERY
@@ -1405,6 +1470,8 @@ def release_flight(c: Campaign) -> None:
         f["player"] = False
     w["mode"], w["player_flight"] = "running", None
     w.pop("spectating", None)
+    for mf in w.get("missile_flights", []):   # the mission won't be flown: the engine settles them again
+        mf.pop("in_dcs", None)
 
 
 def spectate(c: Campaign) -> float:
@@ -1661,6 +1728,12 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
             f["fuel"] = fuel
             _route_from(c, f, (x, y), end_t, fuel)
             carried_on += 1
+    # Red's weapons that were in the mission and came down while it ran: DCS's results stand.
+    for mf in w.get("missile_flights", []):
+        if mf.get("in_dcs") == sortie.get("id"):
+            if mf["t1"] <= end_t:
+                mf["dcs_flown"] = True
+            mf.pop("in_dcs", None)
     # Pilots who ejected in DCS are on the ground where they came down.
     flight_of = {f["id"]: f for f in w["flights"]}
     for unit, et, ex, ey in report.get("ejects") or []:

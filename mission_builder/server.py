@@ -298,13 +298,17 @@ class State:
                     spec.start, spec.spawn_xy, spec.rtb = "In the air", start["xy"], start["past_target"]
                 ambient = war.ambient_flights(c, f["id"])
                 ground = war.ground_sites(c, f, ambient) + war.downed_pilots_ground(c)
+                launches = war.missile_launches(c)   # red's missiles and drones that fly during it
+                ground += war.missile_target_ground(c, launches, ground)
                 try:
-                    mission, briefing = g.build(spec, ambient, ground)
+                    mission, briefing = g.build(spec, ambient, ground, launches)
                 except g.NoParkingSlotError:
                     spec.start = "In the air"
-                    mission, briefing = g.build(spec, ambient, ground)
+                    mission, briefing = g.build(spec, ambient, ground, launches)
                 self.current = (spec, mission, briefing)
                 saved = self.save()
+                if briefing.sortie:
+                    war.mark_missiles_in_dcs(c, launches, briefing.sortie)
             except Exception:
                 war.release_flight(c)
                 raise
@@ -393,13 +397,16 @@ class State:
                                      enemy_skill="Good", seed=rng.randrange(1, 2**31))
                 ambient = war.ambient_flights(c, "")
                 ground = war.spectator_ground(c, ambient) + war.downed_pilots_ground(c)
-                mission, briefing = g.build_spectator(spec, ambient, ground)
+                launches = war.missile_launches(c)   # red's missiles and drones that fly during it
+                ground += war.missile_target_ground(c, launches, ground)
+                mission, briefing = g.build_spectator(spec, ambient, ground, launches)
                 out_dir = Path(self.config["output_dir"])
                 out_dir.mkdir(parents=True, exist_ok=True)
                 path = out_dir / f"Watch_{theatre}_{war.clock_label(c).replace(' ', '_').replace(':', '')}.miz"
                 mission.save(str(path))
                 if briefing.sortie:
                     c.register_sortie(briefing.sortie, str(path), "Spectate", "", briefing.tracked, radars=briefing.radars)
+                    war.mark_missiles_in_dcs(c, launches, briefing.sortie)
                     c.data["sorties"][-1]["began"] = began
             except Exception:
                 war.release_flight(c)

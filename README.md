@@ -176,9 +176,19 @@ spirit of Falcon BMS's dynamic campaign:
   180 km/h, so a drone from deep inside Iran takes over two hours) and is drawn on the map moving
   from its launcher (Map → Missiles and drones in flight), with where it was shot down or hit;
   its effect lands when it arrives. Each salvo is logged, and marked ☄, when its last weapon is down. Launch sites are ordinary red sites: blue can strike them,
-  and they're lost with their zone. In DCS missions they're placed as the nearest stock units
-  (Scud-B launchers, the HY-2 coastal launcher, trucks for drone sites); the war engine flies the
-  missiles, DCS doesn't. In 10-day test wars red fired 215-335, about two-thirds were shot down.
+  and they're lost with their zone. In DCS missions the launch sites are placed as stock units
+  (Scud-B launchers, the HY-2 coastal launcher, trucks for drone sites), and the strikes that fall
+  while a mission runs (planned up to 90 minutes ahead) are fired in DCS at the campaign's times,
+  from the same points the map shows: ballistic and hypersonic missiles by 9K720 Iskander
+  launchers (Currenthill pack, shipped in DCS's CoreMods; 400 km, so a deep launcher fires from a
+  firing point within 370 km of its target), cruise missiles by a Tu-95MS stand-in (Kh-555) that
+  appears at the launch point, fires and turns back (no DCS ground launcher hits land targets),
+  drones as Wing Loongs (drones already on their way are placed in the air where they are).
+  Cruise missiles already in flight when a mission starts can't be shown (DCS can't create a
+  missile in flight). What these weapons do in DCS comes back with the mission's results; the
+  engine settles the rest. Tested in DCS (2026-10-28): Iskanders, Tu-95MS/Kh-555, Tu-160/Kh-65
+  and Wing Loongs fire at land targets; launching a ground launcher at a set time (a pushed fire
+  order) is not yet confirmed (test mission MB_Test_E_Timing). In 10-day test wars red fired 215-335, about two-thirds were shot down.
 - **Weaponeering** (`mission_builder/weaponeering.py`). Each strike flight's weapons are matched
   to the units of its target: units in priority order (on a SAM site its radars first, then
   launchers with their own radar, then the rest), each gets the best weapon on board for that
