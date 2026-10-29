@@ -171,8 +171,11 @@ spirit of Falcon BMS's dynamic campaign:
   and Shahed-136 attack drones (30%). Each is shot down by the blue air defence covering its
   target with that type's chance per site (Hawks and Vulcans stop drones and cruise missiles far
   more often than ballistic missiles; almost nothing stops a hypersonic one), and one that gets
-  through hits with its type's chance, killing one unit of a site (air defence first). Salvos show
-  on the map as ☄ markers and in the log. Launch sites are ordinary red sites: blue can strike them,
+  through hits with its type's chance, killing one unit of a site (air defence first). Each weapon flies at
+  its type's speed (ballistic about 1.8 km/s, hypersonic 3, cruise missiles 250 m/s, Shaheds about
+  180 km/h, so a drone from deep inside Iran takes over two hours) and is drawn on the map moving
+  from its launcher (Map → Missiles and drones in flight), with where it was shot down or hit;
+  its effect lands when it arrives. Each salvo is logged, and marked ☄, when its last weapon is down. Launch sites are ordinary red sites: blue can strike them,
   and they're lost with their zone. In DCS missions they're placed as the nearest stock units
   (Scud-B launchers, the HY-2 coastal launcher, trucks for drone sites); the war engine flies the
   missiles, DCS doesn't. In 10-day test wars red fired 215-335, about two-thirds were shot down.

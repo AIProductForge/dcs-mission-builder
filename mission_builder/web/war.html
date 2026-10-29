@@ -124,6 +124,7 @@
     <label><input type="radio" name="base" value="satellite"> Satellite</label>
     <label><input type="radio" name="base" value="plain"> Plain</label>
     <label><input type="checkbox" id="hillshade"> Hillshade relief</label>
+    <label><input type="checkbox" id="show-missiles" checked> Missiles and drones in flight</label>
     <span class="sep"></span>
     <div class="map-layers-title" title="Each site's DCS range for the system placed there (from DCS's unit data, the same ranges the campaign's odds use): how far SAMs and short-range air defence engage aircraft, how far early-warning radars see. A damaged site shows what its surviving units reach.">Coverage rings ⓘ</div>
     <label><input type="checkbox" data-ring="red" checked> Enemy</label>
@@ -140,6 +141,9 @@
     <span><i class="plane red"></i>Enemy flight</span>
     <span><i class="battle-key">✸</i>Air battle (red: aircraft lost)</span>
     <span><i class="missile-key">☄</i>Missile and drone strike (red: a site destroyed)</span>
+    <span><i class="mf ballistic"></i>Ballistic</span><span><i class="mf hypersonic"></i>Hypersonic</span>
+    <span><i class="mf cruise"></i>Cruise missile</span><span><i class="mf drone"></i>Drone</span>
+    <span><i class="mf-end down">✕</i>Shot down</span><span><i class="mf-end hit">✹</i>Hit</span>
     <span><i class="pilot-key">⛑</i>Downed pilot (rescue flights go automatically)</span>
   </div>
 </main>

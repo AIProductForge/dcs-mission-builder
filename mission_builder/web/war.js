@@ -90,7 +90,7 @@ function initMap() {
   // Leaflet measures its container once; re-measure when the layout changes it (fonts, panels, resize).
   new ResizeObserver(() => S.map.invalidateSize()).observe($("map"));
   S.ringRenderer = L.canvas({ padding: 0.5 });  // hundreds of circles: canvas keeps panning smooth
-  for (const k of ["rings", "sites", "fields", "route", "battles", "pilots", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
+  for (const k of ["rings", "sites", "fields", "route", "battles", "pilots", "missiles", "flights", "plan"]) S.layers[k] = L.layerGroup().addTo(S.map);
   // With the frag form open on a CAP, a click on the map sets the station.
   S.map.on("click", (e) => {
     if (!$("plan").open || $("p-mission").value !== "CAP") return;
@@ -829,8 +829,47 @@ function drawPilots() {
   }
 }
 
+// Red's missiles and drones in flight: a dot moving from its launcher toward its target at its
+// type's speed (engine: war.missile_tick), with a faint trail; where it ended for MISSILE_SHOW.
+const MISSILE_SHOW = 15 * 60;
+const MISSILE_COLOR = { ballistic: "#d0342c", hypersonic: "#8e2bd0", cruise: "#e08a1e", drone: "#4a4a4a" };
+const MISSILE_NAME = { ballistic: "Ballistic missile", hypersonic: "Hypersonic missile", cruise: "Cruise missile", drone: "Attack drone" };
+const MISSILE_FATE = { down: "shot down", hit: "hit its target", miss: "missed", through: "got through" };
+
+function drawMissiles() {
+  if (!S.map || !S.snap) return;
+  const t = clockNow();
+  const key = Math.floor(t / 5) + "|" + (S.snap.missile_flights || []).length + "|" + $("show-missiles").checked;
+  if (S.missileKey === key) return;
+  S.missileKey = key;
+  S.layers.missiles.clearLayers();
+  if (!$("show-missiles").checked) return;
+  for (const m of S.snap.missile_flights || []) {
+    if (t < m.t0 || t > m.t1 + MISSILE_SHOW) continue;
+    const name = MISSILE_NAME[m.type] || m.type;
+    if (t <= m.t1) {   // in flight
+      const k = (t - m.t0) / Math.max(1, m.t1 - m.t0);
+      const at = [m.from[0] + (m.end[0] - m.from[0]) * k, m.from[1] + (m.end[1] - m.from[1]) * k];
+      L.polyline([m.from, at], { color: MISSILE_COLOR[m.type] || "#b04ad0", weight: 1.5, opacity: 0.7, dashArray: "3 4", interactive: false })
+        .addTo(S.layers.missiles);
+      L.marker(at, { keyboard: false, zIndexOffset: 900, icon: L.divIcon({ className: "", iconSize: [12, 12], iconAnchor: [6, 6],
+        html: `<i class="mf ${m.type}"></i>` }) })
+        .bindTooltip(`${name}, launched ${label(m.t0)}, arrives about ${label(m.t1)}`, { className: "map-tip" })
+        .addTo(S.layers.missiles);
+    } else {           // where it ended
+      const fate = m.fate === "through" ? "miss" : m.fate;
+      const fade = 1 - (t - m.t1) / MISSILE_SHOW;
+      L.marker(m.end, { keyboard: false, zIndexOffset: 800, icon: L.divIcon({ className: "", iconSize: [14, 14], iconAnchor: [7, 7],
+        html: `<i class="mf-end ${fate}" style="opacity:${(0.3 + 0.7 * fade).toFixed(2)}">${fate === "down" ? "✕" : fate === "hit" ? "✹" : "·"}</i>` }) })
+        .bindTooltip(`${name} ${MISSILE_FATE[m.fate] || m.fate} at ${label(m.t1)}`, { className: "map-tip" })
+        .addTo(S.layers.missiles);
+    }
+  }
+}
+
 function render(full) {
   renderClock();
+  drawMissiles();
   drawBattles();
   drawPilots();
   if (!$("plan").open || full) renderPlan();
@@ -938,6 +977,7 @@ async function boot() {
   $("btn-run").addEventListener("click", () => clockCmd({ paused: !S.snap.paused }));
   for (const b of document.querySelectorAll(".rate")) b.addEventListener("click", () => clockCmd({ rate: Number(b.dataset.rate) }));
   for (const id of ["show-blue", "show-red", "show-done"]) $(id).addEventListener("change", renderAto);
+  $("show-missiles").addEventListener("change", () => { S.missileKey = null; drawMissiles(); });
   $("btn-fly").addEventListener("click", fly);
   $("btn-jump").addEventListener("click", jumpIn);
   $("btn-watch").addEventListener("click", async () => {
@@ -986,7 +1026,7 @@ async function boot() {
   setInterval(() => refresh(false), 2000);
   setInterval(() => api("/api/ping", {}).catch(() => setStatus("Mission Builder has stopped. Relaunch it to continue.", "err")), 15000);
   api("/api/ping", {}).catch(() => {});
-  setInterval(() => { if (running()) { drawFlights(); drawBattles(); drawPilots(); } }, 100);
+  setInterval(() => { if (running()) { drawFlights(); drawBattles(); drawPilots(); drawMissiles(); } }, 100);
   setInterval(() => { if (running()) { renderAto(); renderSelected(); } }, 1000);
 }
 

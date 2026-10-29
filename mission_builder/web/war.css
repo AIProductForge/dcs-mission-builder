@@ -125,3 +125,9 @@ details.commander textarea { width: 100%; background: #10120f; color: var(--pane
 .battle.missile { color: #b04ad0; }
 .battle.missile.kill { color: #e0574d; }
 .map-legend i.missile-key { color: #b04ad0; font-style: normal; }
+i.mf { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); }
+i.mf.ballistic { background: #d0342c; } i.mf.hypersonic { background: #8e2bd0; border-radius: 1px; transform: rotate(45deg); }
+i.mf.cruise { background: #e08a1e; } i.mf.drone { background: #4a4a4a; width: 8px; height: 8px; }
+.map-legend i.mf { margin-right: 4px; }
+i.mf-end { font-style: normal; font-size: 16px; line-height: 16px; display: inline-block; text-shadow: 0 0 2px #fff, 0 0 2px #fff; }
+i.mf-end.down { color: #555; } i.mf-end.hit { color: #d0342c; } i.mf-end.miss { color: #e08a1e; }
