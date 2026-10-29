@@ -106,10 +106,31 @@ REST = {"bomber": 24 * 3600, "jet": 4 * 3600, "heli": 2 * 3600}
 LOSS_COST = 0.6                 # how much one expected aircraft lost weighs against a hit
 # Stand-off weapons that outrange the big SAMs, and how far from the target they're released.
 LONG_STANDOFF = {"AGM-86": 400_000, "AGM-158": 250_000, "Kh-59": 150_000, "AGM-154": 110_000, "Kh-31": 90_000}
-# Ballistic missiles from a missile site (red's Scud batteries): one salvo per site every MISSILE_REST.
-MISSILE_REACH = 280_000
-MISSILE_REST = 6 * 3600
-MISSILE_HIT = 0.35              # a Scud salvo on a point target: inaccurate, nothing in DCS shoots it down
+# Red's missile force: launch sites dispersed through red territory that fire salvos through the
+# day, up to MISSILES_PER_DAY in all, never running out. Per type: what it is, share of launches,
+# the launch site's system (systems.py), reach, chance a missile that gets through hits its target,
+# and the chance each covering blue air defence site (by role, at full strength) shoots one down.
+# Estimates: Hawks and Vulcans stop slow drones and cruise missiles far better than ballistic ones,
+# and next to nothing stops a hypersonic missile.
+MISSILE_SITES = 24
+MISSILES_PER_DAY = 50
+SALVO_CHANCE = 0.35             # per planning step (every PLAN_EVERY), while the day's budget lasts
+MISSILE_TYPES = {
+    "ballistic": {"label": "ballistic missile (Fateh-110, Zolfaghar)", "share": 0.4,
+                  "system": "Ballistic missile battery", "reach": 750_000, "hit": 0.35,
+                  "intercept": {"sam": 0.12}},
+    "hypersonic": {"label": "hypersonic missile (Fattah)", "share": 0.1,
+                   "system": "Ballistic missile battery", "reach": 1_400_000, "hit": 0.5,
+                   "intercept": {"sam": 0.03}},
+    "cruise": {"label": "cruise missile (Hoveyzeh, Paveh)", "share": 0.2,
+               "system": "Cruise missile battery", "reach": 1_350_000, "hit": 0.5,
+               "intercept": {"sam": 0.35, "shorad": 0.15}},
+    "drone": {"label": "attack drone (Shahed-136)", "share": 0.3,
+              "system": "Drone launch site", "reach": 2_000_000, "hit": 0.3,
+              "intercept": {"sam": 0.4, "shorad": 0.3}},
+}
+# What a salvo goes after on a blue airfield (weights): air defence first, to open the way.
+MISSILE_TARGET_WEIGHT = {"sam": 3.0, "ewr": 2.0, "shorad": 1.5}
 MISSION_FOR_ROLE = {"sam": "SEAD", "ewr": "SEAD", "structure": "Strike", "missile": "Strike",
                     "armor": "CAS", "shorad": "CAS", "farp": "Strike"}
 
@@ -176,6 +197,7 @@ def init(c: Campaign, blue_types: list[tuple[str, list[str], bool]], jet_fields:
             w["squadrons"].append({"id": f"{side[0].upper()}SQ{i + 1}", "side": side, "type": type_id,
                                    "missions": missions, "heli": heli, "base": base, "total": SQUADRON_SIZE})
     add_bombers(c, jet_fields)
+    ensure_missile_force(c)
 
 
 def add_bombers(c: Campaign, jet_fields: set[str]) -> bool:
@@ -456,37 +478,118 @@ def _plan_heavy(c: Campaign, side: str, site: dict, lo: float, hi: float, target
                             profile=profile, commit=False, standoff=dist)
             p_hit, p_loss = strike_odds(c, f, f["tot"])
             options.append((p_hit - LOSS_COST * p_loss * count, p_hit, "flight", (sq, mission, count, f, loadout, profile, dist)))
-    missiles = [m for m in c.alive_sites(side) if m["role"] == "missile" and side == "red"
-                and _dist((m["x"], m["y"]), xy) <= MISSILE_REACH and lo - m.get("fired", -1e9) >= MISSILE_REST]
-    if missiles:
-        options.append((MISSILE_HIT, MISSILE_HIT, "missile", missiles[0]))
     options = [o for o in options if o[1] >= MIN_PACKAGE_HIT]
     if not options:
         return False
     _, _, kind, args = max(options, key=lambda o: o[0])
-    if kind == "missile":
-        _missile_salvo(c, args, target, lo, rng)
-    else:
-        sq, mission, count, f, loadout, profile, dist = args
-        _new_flight(c, sq, mission, count, f["takeoff"], xy, target["id"], loadout=loadout, profile=profile,
-                    standoff=dist)
+    sq, mission, count, f, loadout, profile, dist = args
+    _new_flight(c, sq, mission, count, f["takeoff"], xy, target["id"], loadout=loadout, profile=profile,
+                standoff=dist)
     targeted.add(target["id"])
     return True
 
 
-def _missile_salvo(c: Campaign, battery: dict, target: dict, t: float, rng: random.Random) -> None:
-    """A ballistic missile salvo from a missile site: settled when fired (minutes of flight)."""
-    battery["fired"] = t
-    hit = target["alive"] and rng.random() < MISSILE_HIT * battery.get("strength", 1.0)
-    what = f"{_role_name(target)} near {target['zone']}"
-    if hit:
-        target["alive"] = False
-        schedule_repair(target, t, rng)
-    c.log(f"{clock_label(c, t)} · Ballistic missile salvo from the missile battery near {battery['zone']} "
-          f"{'destroyed' if hit else 'missed'} {what}.", "Missile", "Scud-B", side=battery["side"], t=t)
-    if hit:
-        for change in c.capture_check(battery["side"], t):
-            c.log(f"{clock_label(c, t)} · {change}", side=battery["side"], t=t)
+def ensure_missile_force(c: Campaign, rng: random.Random | None = None) -> bool:
+    """Red's missile launch sites, if the war doesn't have them yet: MISSILE_SITES of them by type
+    share, spread through red territory (next to red sites and airfield garrisons, which are on
+    land, and as far apart as possible). Returns True if any were added."""
+    if any(s.get("missile_type") for s in c.data["sites"]) or not c.fields_of("red"):
+        return False
+    rng = rng or random.Random(7)
+    blue = [c.data["field_pos"][n] for n in c.fields_of("blue")] or [[0, 0]]
+    anchors = [(s["x"], s["y"]) for s in c.data["sites"] if s["side"] == "red"]
+    anchors += [tuple(p) for n in c.fields_of("red") for p in c.data["garrison_pos"][n]]
+    anchors = [a for a in anchors if min(_dist(a, b) for b in blue) > 40_000] or anchors
+    picked = [max(anchors, key=lambda a: min(_dist(a, b) for b in blue))]   # deepest first
+    while len(picked) < min(MISSILE_SITES, len(anchors)):
+        picked.append(max(anchors, key=lambda a: min(_dist(a, p) for p in picked)))
+    kinds = [k for k, m in MISSILE_TYPES.items() for _ in range(round(m["share"] * MISSILE_SITES))]
+    for i, (x, y) in enumerate(picked):
+        kind = kinds[i % len(kinds)]
+        bx, by = x + rng.uniform(-800, 800), y + rng.uniform(-800, 800)
+        zone = min(c.fields_of("red"), key=lambda n: _dist(c.data["field_pos"][n], (bx, by)))
+        site = c.add_site("red", "missile", bx, by, zone)
+        site["system"], site["missile_type"] = MISSILE_TYPES[kind]["system"], kind
+    return True
+
+
+def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
+    """Red's missile force at a planning step: maybe a salvo at a blue airfield, within the day's
+    budget. Settled when fired: each missile is shot down by the air defence covering its
+    target or gets through, and one that gets through hits with its type's chance, killing one
+    unit of its target site."""
+    w = _war(c)
+    day = int(t // 86400)
+    m = w.setdefault("missiles", {"day": day, "fired": 0, "total": 0, "down": 0, "hits": 0})
+    if m["day"] != day:
+        m["day"], m["fired"] = day, 0
+    left = MISSILES_PER_DAY - m["fired"]
+    launchers = [s for s in c.alive_sites("red") if s.get("missile_type")]
+    targets_by_field = {n: [s for s in c.alive_sites("blue") if s["zone"] == n] for n in c.fields_of("blue")}
+    targets_by_field = {n: v for n, v in targets_by_field.items() if v}
+    if left <= 0 or not launchers or not targets_by_field or rng.random() > SALVO_CHANCE:
+        return
+    # Spread the day's budget over the steps left in it.
+    steps_left = max(1, (86400 - t % 86400) / PLAN_EVERY)
+    size = max(1, min(left, round(rng.gauss(left / (steps_left * SALVO_CHANCE), 2))))
+    field = rng.choice(list(targets_by_field))
+    fxy = c.data["field_pos"][field]
+    sites = targets_by_field[field]
+    cover = [s for s in c.alive_sites("blue") if s["role"] in ("sam", "shorad") and site_ranges(s)[0]
+             and _dist((s["x"], s["y"]), fxy) <= site_ranges(s)[0] + 5_000]
+    fired, down, hits, results = {}, 0, 0, {}
+    for _ in range(size):
+        ready = [l_ for l_ in launchers if _dist((l_["x"], l_["y"]), fxy) <= MISSILE_TYPES[l_["missile_type"]]["reach"]]
+        if not ready:
+            break
+        weights = [MISSILE_TYPES[l_["missile_type"]]["share"] / sum(1 for x in ready if x["missile_type"] == l_["missile_type"])
+                   * l_.get("strength", 1.0) for l_ in ready]
+        launcher = rng.choices(ready, weights)[0]
+        kind = MISSILE_TYPES[launcher["missile_type"]]
+        fired[launcher["missile_type"]] = fired.get(launcher["missile_type"], 0) + 1
+        alive_targets = [s for s in sites if s["alive"]]
+        if not alive_targets:
+            break
+        target = rng.choices(alive_targets, [MISSILE_TARGET_WEIGHT.get(s["role"], 1.0) for s in alive_targets])[0]
+        if any(rng.random() < kind["intercept"].get(s["role"], 0.0) * s.get("strength", 1.0) for s in cover if s["alive"]):
+            down += 1
+            continue
+        if rng.random() >= kind["hit"]:
+            continue
+        hits += 1
+        units = site_units(target)
+        target["strength"] = round(target.get("strength", 1.0) - 1 / len(units), 2)
+        radars = sum(1 for u in units if weaponeering.target_class(u) == "radar")
+        blinded = target["role"] in ("sam", "ewr") and radars and rng.random() < radars / len(units)
+        if blinded or target["strength"] < 0.5:
+            target["alive"] = False
+            target.pop("strength", None)
+            schedule_repair(target, t, rng)
+            results[target["id"]] = "destroyed"
+        else:
+            results.setdefault(target["id"], "damaged")
+            if "repair_at" not in target:
+                schedule_repair(target, t, rng)
+    n = sum(fired.values())
+    if not n:
+        return
+    m["fired"] += n
+    m["total"] = m.get("total", 0) + n
+    m["down"] = m.get("down", 0) + down
+    m["hits"] = m.get("hits", 0) + hits
+    by_id = {s["id"]: s for s in c.data["sites"]}
+    done = [f"{v} {_role_name(by_id[k])}" for k, v in results.items()]
+    what = ", ".join(f"{k_n} {MISSILE_TYPES[k]['label'].split(' (')[0]}{'s' if k_n > 1 else ''}"
+                     for k, k_n in sorted(fired.items(), key=lambda x: -x[1]))
+    text = (f"Missile strike on {field}: {n} launched ({what}); {down} shot down, {hits} hit"
+            + (f": {'; '.join(done)}" if done else "") + ".")
+    w.setdefault("battles", []).append({"t": t, "ll": c.data["field_ll"][field], "text": text, "sides": ["red", "blue"],
+                                        "kills": sum(1 for v in results.values() if v == "destroyed"), "missile": True})
+    w["battles"] = [b for b in w["battles"] if b["t"] >= t - BATTLE_MEMORY][-60:]
+    c.log(f"{clock_label(c, t)} · {text}", "Missile", "", side="red", t=t)
+    if results:
+        for change in c.capture_check("red", t):
+            c.log(f"{clock_label(c, t)} · {change}", side="red", t=t)
             _after_capture(c, t)
 
 
@@ -614,6 +717,8 @@ def migrate(c: Campaign) -> bool:
         if sq["type"] in ("UH-60A", "Mi-24V") and "CSAR" not in sq["missions"]:
             sq["missions"] = sq["missions"] + ["CSAR"]
             changed = True
+    if ensure_missile_force(c):  # wars started before red's missile force
+        changed = True
     for s in c.data["sites"]:  # sites from before each had its DCS system: the one missions placed
         if "system" not in s and system_for(s["side"], s["role"]):
             s["system"] = system_for(s["side"], s["role"])
@@ -969,6 +1074,7 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
         changed = True
         if kind == "plan":
             pilots_tick(c, t)
+            missile_tick(c, t, rng)
             plan(c, t, rng)
             plan_csar(c, t, rng)
             w["next_plan"] = t + PLAN_EVERY
@@ -1526,6 +1632,7 @@ def snapshot(c: Campaign) -> dict:
         "ai_only": sorted(AI_ONLY),
         "battles": w.get("battles", []),
         "pilots": w.get("pilots", []),
+        "missiles": w.get("missiles", {}),
         "flights": [{k: v for k, v in f.items() if k != "route"} |
                     {"route": [{"name": r["name"], "ll": r["ll"], "t": r["t"], "alt": r.get("alt")}
                                for r in f["route"]]}

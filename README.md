@@ -161,6 +161,18 @@ spirit of Falcon BMS's dynamic campaign:
   the defences over the target shoot some down, so numbers win (a B-52 counts as two pairs of
   shooters). It sends nothing when no option has a 25% chance. Constants at the top of `war.py`
   (`HEAVY_DEFENCE`, `STANDOFF_HIT`, `STANDOFF_DEFENCE`, `AI_BOMBERS`).
+- **Red's missile force.** Red relies on missiles and drones more than air strikes: 24 launch
+  sites spread through red territory (`war.MISSILE_SITES`) fire salvos at blue airfields through
+  the day, up to 50 a day (`MISSILES_PER_DAY`), and never run out. The mix: ballistic missiles
+  (Fateh-110, Zolfaghar; 40%), hypersonic (Fattah; 10%), cruise missiles (Hoveyzeh, Paveh; 20%)
+  and Shahed-136 attack drones (30%). Each is shot down by the blue air defence covering its
+  target with that type's chance per site (Hawks and Vulcans stop drones and cruise missiles far
+  more often than ballistic missiles; almost nothing stops a hypersonic one), and one that gets
+  through hits with its type's chance, killing one unit of a site (air defence first). Salvos show
+  on the map as ☄ markers and in the log. Launch sites are ordinary red sites: blue can strike them,
+  and they're lost with their zone. In DCS missions they're placed as the nearest stock units
+  (Scud-B launchers, the HY-2 coastal launcher, trucks for drone sites); the war engine flies the
+  missiles, DCS doesn't. In 10-day test wars red fired 215-335, about two-thirds were shot down.
 - **Weaponeering** (`mission_builder/weaponeering.py`). Each strike flight's weapons are matched
   to the units of its target: units in priority order (on a SAM site its radars first, then
   launchers with their own radar, then the rest), each gets the best weapon on board for that

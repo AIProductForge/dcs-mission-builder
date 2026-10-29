@@ -31,6 +31,13 @@ SYSTEMS: dict[str, list] = {
     "Abrams company": [_A.M_1_Abrams, _A.M_2_Bradley, _A.M_2_Bradley],
     "Scud battery": [vehicles.MissilesSS.Scud_B, vehicles.MissilesSS.Scud_B, vehicles.Unarmed.Ural_375],
     "MLRS battery": [vehicles.Artillery.MLRS, vehicles.Artillery.MLRS, vehicles.Unarmed.M_818],
+    # Red's missile force (war.MISSILE_TYPES). DCS has no Iranian missiles or drones: these are the
+    # nearest stock units (Scud-B launchers for ballistic and hypersonic, the HY-2 coastal launcher
+    # for cruise missiles, trucks for a drone launch site). The war engine flies the missiles.
+    "Ballistic missile battery": [vehicles.MissilesSS.Scud_B, vehicles.MissilesSS.Scud_B, vehicles.Unarmed.Ural_375],
+    "Cruise missile battery": [vehicles.MissilesSS.Silkworm_SR, vehicles.MissilesSS.Hy_launcher,
+                               vehicles.MissilesSS.Hy_launcher],
+    "Drone launch site": [vehicles.Unarmed.Ural_375, vehicles.Unarmed.Ural_375, vehicles.Unarmed.Ural_375],
 }
 # What each side places for each role (these are the systems the missions placed before sites
 # had a system of their own, so older campaigns keep their balance).
@@ -42,7 +49,8 @@ DEFAULT = {
 }
 
 ROLE = {**{name: role for side in DEFAULT.values() for role, name in side.items()},
-        "SA-10": "sam", "SA-11": "sam", "SA-15": "sam", "SA-8": "sam", "55G6 EWR": "ewr"}
+        "SA-10": "sam", "SA-11": "sam", "SA-15": "sam", "SA-8": "sam", "55G6 EWR": "ewr",
+        "Ballistic missile battery": "missile", "Cruise missile battery": "missile", "Drone launch site": "missile"}
 # How much a SAM site of this system counts in the war's odds, against an SA-6 at 1.0: more
 # launchers, longer reach, harder to suppress. A judgement, not DCS data (the ranges are).
 WEIGHT = {"SA-10": 2.0, "SA-11": 1.4, "SA-6": 1.0, "Hawk": 1.0, "SA-15": 0.8, "SA-8": 0.7}

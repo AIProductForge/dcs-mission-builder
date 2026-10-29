@@ -800,7 +800,7 @@ function drawBattles() {
     if (age < 0 || age > BATTLE_SHOW) continue;
     const fade = 1 - age / BATTLE_SHOW;
     L.marker(b.ll, { keyboard: false, zIndexOffset: 500, icon: L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
-      html: `<div class="battle${b.kills ? " kill" : ""}" style="opacity:${(0.35 + 0.65 * fade).toFixed(2)}">✸</div>` }) })
+      html: `<div class="battle${b.kills ? " kill" : ""}${b.missile ? " missile" : ""}" style="opacity:${(0.35 + 0.65 * fade).toFixed(2)}">${b.missile ? "☄" : "✸"}</div>` }) })
       .bindTooltip(`${label(b.t)}: ${b.text}`, { className: "map-tip" })
       .addTo(S.layers.battles);
   }

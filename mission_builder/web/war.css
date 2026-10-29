@@ -122,3 +122,6 @@ details.commander textarea { width: 100%; background: #10120f; color: var(--pane
 .pilot.rescued, .pilot.recovered { opacity: .45; } .pilot.captured { opacity: .45; filter: grayscale(1); }
 .map-legend i.pilot-key { color: #2f6fd6; font-style: normal; }
 .aimpoints { margin-top: 4px; }
+.battle.missile { color: #b04ad0; }
+.battle.missile.kill { color: #e0574d; }
+.map-legend i.missile-key { color: #b04ad0; font-style: normal; }
