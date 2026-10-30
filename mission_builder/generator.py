@@ -741,6 +741,10 @@ def _follow_terrain(group) -> None:
 
 
 
+# An Iskander fires about 55 s after its fire order is pushed (test E, 2026-10-29: 54-55 s each time).
+ISKANDER_SETUP = 55
+
+
 def add_missiles(B: "_Builder", launches: list[dict]) -> None:
     """Red's missile and drone strikes that fall in the mission (war.missile_launches), fired by
     real DCS units at the campaign's times, so what the campaign map shows can be watched in DCS.
@@ -751,7 +755,8 @@ def add_missiles(B: "_Builder", launches: list[dict]) -> None:
         (Kh-555, Currenthill pack) appears at the launch point at launch time, fires and turns back;
       drone: a Wing Loong (stock) flies from the launch point and attacks the target with AKD-10s.
     The launch time comes from a trigger that pushes a stored fire order (ground launchers) or
-    activates the aircraft; the pushed order is the one part not yet seen working in DCS (test E)."""
+    activates the aircraft. Test E (2026-10-29) confirmed both: pushed orders fire (two salvos from one
+    launcher too), about ISKANDER_SETUP seconds after the push; late-activated drones attack."""
     bombers: dict[tuple, list[dict]] = {}
     for n, l_ in enumerate(launches):
         start = Point(l_["start_xy"][0], l_["start_xy"][1], B.terrain)
@@ -761,7 +766,8 @@ def add_missiles(B: "_Builder", launches: list[dict]) -> None:
                                   start, heading=start.heading_between_point(aim), group_size=1)
             g.add_trigger_action(task.FireAtPoint(Point(aim.x, aim.y, B.terrain), rounds=1, radius=100))
             t = TriggerOnce(comment=f"Missile launch {l_['salvo']}-{n}")
-            t.add_condition(condition.TimeAfter(max(1, l_["delay"])))
+            # The order goes out early by the launcher's set-up time, so it fires at the campaign's time.
+            t.add_condition(condition.TimeAfter(max(1, l_["delay"] - ISKANDER_SETUP)))
             t.add_action(action.AITaskPush(g.id, 1))
             B.m.triggerrules.triggers.append(t)
         elif l_["type"] == "cruise":

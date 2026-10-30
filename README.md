@@ -187,8 +187,8 @@ spirit of Falcon BMS's dynamic campaign:
   Cruise missiles already in flight when a mission starts can't be shown (DCS can't create a
   missile in flight). What these weapons do in DCS comes back with the mission's results; the
   engine settles the rest. Tested in DCS (2026-10-28): Iskanders, Tu-95MS/Kh-555, Tu-160/Kh-65
-  and Wing Loongs fire at land targets; launching a ground launcher at a set time (a pushed fire
-  order) is not yet confirmed (test mission MB_Test_E_Timing). In 10-day test wars red fired 215-335, about two-thirds were shot down.
+  and Wing Loongs fire at land targets; a ground launcher fires at a set time from a pushed fire order
+  (2026-10-29: an Iskander launches about 55 s after the order, which goes out that much early). In 10-day test wars red fired 215-335, about two-thirds were shot down.
 - **Weaponeering** (`mission_builder/weaponeering.py`). Each strike flight's weapons are matched
   to the units of its target: units in priority order (on a SAM site its radars first, then
   launchers with their own radar, then the rest), each gets the best weapon on board for that
