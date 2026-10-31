@@ -297,6 +297,8 @@ class State:
                 if start["airborne"]:  # joining a flight in the air, where the map shows it
                     spec.start, spec.spawn_xy, spec.rtb = "In the air", start["xy"], start["past_target"]
                 ambient = war.ambient_flights(c, f["id"])
+                # The campaign's own AWACS, if one flies during this mission, replaces the generic one.
+                spec.awacs = not any(a["mission"] == "AWACS" and a["side"] == "blue" for a in ambient)
                 ground = war.ground_sites(c, f, ambient) + war.downed_pilots_ground(c)
                 launches = war.missile_launches(c)   # red's missiles and drones that fly during it
                 ground += war.missile_target_ground(c, launches, ground)

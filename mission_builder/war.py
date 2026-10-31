@@ -77,7 +77,16 @@ CSAR_RANGE = {"blue": 160_000, "red": 130_000}
 SOF_RANGE = 160_000
 SOF_STANDOFF = 4_000          # the landing zone is this far short of the target
 SOF_ON_GROUND = 40 * 60       # the team works for this long before extraction
-AI_ONLY = {b[0] for b in BOMBERS} | {SOF_SQUADRON[0]}
+# AWACS: each side keeps one orbiting behind its front. Friendly CAPs inside its radar coverage see
+# further and more often; the other side sends fighters to hunt it. Estimates, not DCS data.
+AWACS_SQUADRONS = {"blue": ("E-3A", 3), "red": ("A-50", 3)}   # type, aircraft
+AWACS_ON_STATION = 4 * 3600
+AWACS_RADAR = 370_000
+AWACS_STANDBACK = 150_000       # orbit this far behind the friendly field nearest the enemy
+AWACS_DETECT = 120_000          # a CAP's detection range under AWACS cover
+AWACS_P_BONUS = 0.25            # added to its chance per look (stealth: a fifth of this)
+AWACS_HUNT_CHANCE = 0.15        # per planning step: fighters sent after an enemy AWACS on station
+AI_ONLY = {b[0] for b in BOMBERS} | {SOF_SQUADRON[0]} | {v[0] for v in AWACS_SQUADRONS.values()}
 # Attack profiles. "low": under the SAM coverage, into the guns. "standoff": weapons released
 # from STANDOFF_RANGE short of the target (needs stand-off weapons). "sof": special forces raid.
 PROFILES = ("standard", "low", "standoff", "sof")
@@ -208,6 +217,7 @@ def init(c: Campaign, blue_types: list[tuple[str, list[str], bool]], jet_fields:
             w["squadrons"].append({"id": f"{side[0].upper()}SQ{i + 1}", "side": side, "type": type_id,
                                    "missions": missions, "heli": heli, "base": base, "total": SQUADRON_SIZE})
     add_bombers(c, jet_fields)
+    ensure_awacs_squadrons(c)
     ensure_missile_force(c)
 
 
@@ -297,13 +307,13 @@ def _route(c: Campaign, sq: dict, mission: str, target, takeoff: float,
         pts.append(("TARGET", launch, speed))  # weapons release point
         marks["tot"] = len(pts) - 1
         pts.append(("EGRESS", _side_step(target, launch, 20_000), speed))
-    elif mission == "CAP":
+    elif mission in ("CAP", "AWACS"):
         a = target
         # The orbit's other end: across the line from base; a station over the base itself gets a fixed leg.
         b = _side_step(base, target, 35_000) if _dist(base, target) > 1000 else [a[0] + 25_000, a[1] + 25_000]
         pts.append(("STATION", a, speed))
         marks["station"] = len(pts) - 1
-        legs = max(2, int(CAP_ON_STATION * SPEED["orbit"] / _dist(a, b)))
+        legs = max(2, int((AWACS_ON_STATION if mission == "AWACS" else CAP_ON_STATION) * SPEED["orbit"] / _dist(a, b)))
         for i in range(legs):
             pts.append(("CAP" if i % 2 == 0 else "STATION", b if i % 2 == 0 else a, SPEED["orbit"]))
         marks["off"] = len(pts) - 1
@@ -345,7 +355,7 @@ def _landed(c: Campaign, f: dict, t: float) -> None:
     f["status"], f["end"] = "landed", t
     sq = next((q for q in _war(c)["squadrons"] if q["id"] == f["squadron"]), None)
     if sq and f["count"] > 0:
-        rest = REST["bomber" if sq.get("manual") else "heli" if sq["heli"] else "jet"]
+        rest = REST["bomber" if sq.get("manual") and not sq.get("support") else "heli" if sq["heli"] else "jet"]
         sq["resting"] = [r for r in sq.get("resting", []) if r[0] > t] + [[round(t + rest), f["count"]]]
 
 
@@ -887,6 +897,8 @@ def migrate(c: Campaign) -> bool:
         if sq["type"] in ("UH-60A", "Mi-24V") and "CSAR" not in sq["missions"]:
             sq["missions"] = sq["missions"] + ["CSAR"]
             changed = True
+    if ensure_awacs_squadrons(c):  # wars started before AWACS
+        changed = True
     if ensure_missile_force(c):  # wars started before red's missile force
         changed = True
     for s in c.data["sites"]:  # sites from before each had its DCS system: the one missions placed
@@ -1080,6 +1092,62 @@ def _on_station(f: dict, t: float) -> bool:
             and t >= f.get("dcs_until", 0))
 
 
+def _awacs_covers(flights: list[dict], side: str, xy, t: float) -> bool:
+    return any(a["mission"] == "AWACS" and a["side"] == side and a["count"] > 0 and a.get("station", 1e18) <= t <= a.get("off", 0)
+               and _dist(pos_at(a, t)[:2], xy) <= AWACS_RADAR for a in flights)
+
+
+def ensure_awacs_squadrons(c: Campaign) -> bool:
+    """One AWACS squadron per side, at its rearmost field, if the war doesn't have them yet."""
+    w = _war(c)
+    changed = False
+    for side, (type_id, size) in AWACS_SQUADRONS.items():
+        fields = c.fields_of(side)
+        if not fields or any(q["type"] == type_id and q["side"] == side for q in w["squadrons"]):
+            continue
+        enemy = [c.data["field_pos"][n] for n in c.fields_of(other(side))] or [[0, 0]]
+        rear = max(fields, key=lambda n: min(_dist(c.data["field_pos"][n], e) for e in enemy))
+        w["squadrons"].append({"id": f"{side[0].upper()}AW{len(w['squadrons']) + 1}", "side": side, "type": type_id,
+                               "missions": ["AWACS"], "heli": False, "base": rear, "total": size, "size": size,
+                               "manual": True, "support": True, "speed": 200.0, "alt": 9000})
+        changed = True
+    return changed
+
+
+def plan_awacs(c: Campaign, now: float, rng: random.Random) -> None:
+    """Keep one AWACS up per side, and now and then send fighters after the enemy's."""
+    w = _war(c)
+    lo, hi = now + PLAN_AHEAD[0], now + PLAN_AHEAD[1]
+    for side in ("blue", "red"):
+        own = c.fields_of(side)
+        enemy = c.fields_of(other(side))
+        if not own or not enemy:
+            continue
+        if not any(f["side"] == side and f["mission"] == "AWACS" and _active(f) and f.get("off", 0) >= hi for f in w["flights"]):
+            sq = next((q for q in w["squadrons"] if q["side"] == side and "AWACS" in q["missions"] and q["total"] > 0
+                       and available(c, q) >= 1), None)
+            if sq:
+                centre = [sum(c.data["field_pos"][n][i] for n in enemy) / len(enemy) for i in (0, 1)]
+                front = min(own, key=lambda n: _dist(c.data["field_pos"][n], centre))
+                station = _toward(c.data["field_pos"][front], centre, -AWACS_STANDBACK)
+                f = _new_flight(c, sq, "AWACS", 1, rng.uniform(lo, lo + 600), station)
+                f["target_name"] = f"orbit behind {front}"
+        prey = [f for f in w["flights"] if f["side"] != side and f["mission"] == "AWACS" and f["status"] == "airborne"
+                and f.get("off", 0) > hi]
+        if prey and rng.random() < AWACS_HUNT_CHANCE:
+            a = prey[0]
+            xy = pos_at(a, hi)[:2]
+            hunters = [q for q in w["squadrons"] if q["side"] == side and "CAP" in q["missions"] and not q["heli"]
+                       and not q.get("manual") and available(c, q) >= 2
+                       and _dist(c.data["field_pos"][q["base"]], xy) <= RANGE["jet"]]
+            if hunters:
+                q = max(hunters, key=lambda x: RATING.get(x["type"], 0.7))
+                g = _new_flight(c, q, "CAP", 2, rng.uniform(lo, hi), xy)
+                g["target_name"] = f"hunting {a['callsign']} ({a['type']})"
+                c.log(f"{clock_label(c, now)} · {g['callsign']} ({q['type']}) sent to hunt {a['callsign']} ({a['type']}).",
+                      "CAP", q["type"], side=side, t=now)
+
+
 def air_check(c: Campaign, t: float, rng: random.Random) -> None:
     """Each CAP on station looks for enemy flights near it and goes after the nearest it sees."""
     w = _war(c)
@@ -1095,9 +1163,12 @@ def air_check(c: Campaign, t: float, rng: random.Random) -> None:
                 continue
             gx, gy, _ = pos_at(g, t)
             d = _dist((cx, cy), (gx, gy))
-            if d > DETECT:
+            covered = _awacs_covers(flights, cap["side"], (gx, gy), t)
+            if d > (AWACS_DETECT if covered else DETECT):
                 continue
             p = P_DETECT["stealth"] if g["type"] in STEALTH else P_DETECT["night" if night else "day"]
+            if covered:
+                p += AWACS_P_BONUS * (0.2 if g["type"] in STEALTH else 1.0)
             if rng.random() < p:
                 seen.append((d, g))
         if not seen:
@@ -1224,7 +1295,7 @@ def _next_event(c: Campaign):
         if f["status"] == "planned":
             cand = (f["takeoff"], "takeoff", f)
         elif f["status"] == "airborne" and not f["resolved"] and not f["player"]:
-            cand = (f["station"] if f["mission"] == "CAP" else f["tot"], "resolve", f)
+            cand = (f["station"] if f["mission"] in ("CAP", "AWACS") else f["tot"], "resolve", f)
         elif f["status"] == "airborne":
             cand = (f["land"], "land", f)
         else:
@@ -1252,6 +1323,7 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
                 w["missiles_planned_until"] = t
             plan(c, t, rng)
             plan_csar(c, t, rng)
+            plan_awacs(c, t, rng)
             w["next_plan"] = t + PLAN_EVERY
         elif kind == "replenish":
             for sq in w["squadrons"]:
@@ -1264,7 +1336,7 @@ def advance(c: Campaign, to_t: float, rng: random.Random | None = None) -> bool:
             else:
                 f["status"] = "airborne"
         elif kind == "resolve":
-            if f["mission"] == "CAP":
+            if f["mission"] in ("CAP", "AWACS"):
                 resolve_station(c, f, rng)
             elif f["mission"] == "CSAR":
                 resolve_csar(c, f, rng)
@@ -1307,6 +1379,8 @@ def schedule(c: Campaign, squadron_id: str, mission: str, count: int, tot: float
         raise RuntimeError("Pick a friendly squadron that still has aircraft.")
     if mission == "CSAR":
         raise RuntimeError("Rescue flights are planned automatically for downed pilots.")
+    if mission == "AWACS":
+        raise RuntimeError("AWACS orbits are planned automatically.")
     if mission not in sq["missions"]:
         raise RuntimeError(f"{sq['type']} squadron flies {', '.join(sq['missions'])}, not {mission}.")
     if profile not in PROFILES:
@@ -1388,7 +1462,7 @@ def estimate(c: Campaign, flights: list[dict], objective: dict | None = None, tr
     that lands makes the ones after it safer. objective: {"sites": [ids]} (destroy them all) or
     {"field": name} (capture it). Returns per-flight hit and loss rates and the objective's odds."""
     rng = rng or random.Random(1)
-    order = sorted((f for f in flights if f["mission"] != "CAP"), key=lambda f: f["tot"])
+    order = sorted((f for f in flights if f["mission"] not in ("CAP", "AWACS")), key=lambda f: f["tot"])
     hits = {f["id"]: 0 for f in order}
     losses = {f["id"]: 0.0 for f in order}
     success = 0
@@ -1525,7 +1599,7 @@ def ambient_flights(c: Campaign, player_id: str, horizon: float = 5400) -> list[
         if f["status"] == "airborne" or (f["status"] == "planned" and f["takeoff"] <= now + horizon):
             at = max(now, f["takeoff"])
             x, y, leg = pos_at(f, at)
-            rest = [{"name": r["name"], "x": r["x"], "y": r["y"], "alt": r["alt"], "speed": r["speed"]}
+            rest = [{"name": r["name"], "x": r["x"], "y": r["y"], "alt": r["alt"], "speed": r["speed"], "ll": r.get("ll")}
                     for r in f["route"][leg:] if r["t"] > at]
             if not rest:
                 continue
@@ -1640,7 +1714,7 @@ def _route_from(c: Campaign, f: dict, xy, t: float, fuel: float) -> None:
     speed = SPEED["heli" if f["heli"] else "jet"]
     base = c.data["field_pos"].get(f["base"]) or xy
     pts = [{"name": "DCS", "x": round(xy[0]), "y": round(xy[1]), "t": round(t, 1), "alt": alt, "speed": speed}]
-    if f["mission"] == "CAP" and f.get("off", 0) > t + 600 and fuel >= 0.25:
+    if f["mission"] in ("CAP", "AWACS") and f.get("off", 0) > t + 600 and fuel >= 0.25:
         station = next(((r["x"], r["y"]) for r in f["route"] if r["name"] == "STATION"), xy)
         t_back = t + _dist(xy, station) / speed
         pts.append({"name": "STATION", "x": round(station[0]), "y": round(station[1]), "t": round(t_back, 1),
@@ -1704,7 +1778,7 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
         if not f or f["status"] not in ("airborne", "planned") or f["count"] <= 0:
             continue
         f["dcs_until"] = end_t
-        if f["mission"] not in ("CAP", "CSAR") and not f.get("resolved"):  # rescues are settled by the engine
+        if f["mission"] not in ("CAP", "CSAR", "AWACS") and not f.get("resolved"):  # rescues are settled by the engine
             f["resolved"] = True
             f["result"] = f.get("result") or "flown by the AI in DCS"
         missing = f["count"] - alive
@@ -1761,7 +1835,7 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
             continue
         kills = kills_by.get(fid, [])
         fired = shots.get(fid, 0)
-        if not kills and not fired and (f["mission"] in ("CAP", "CSAR") or f.get("tot", end_t) < began):
+        if not kills and not fired and (f["mission"] in ("CAP", "CSAR", "AWACS") or f.get("tot", end_t) < began):
             continue   # nothing to report, or its attack was over before the mission began
         bits = []
         if f["mission"] != "CAP" or fired:

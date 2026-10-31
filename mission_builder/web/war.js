@@ -602,7 +602,7 @@ function renderMissions() {
   const sel = $("p-mission"), keep = sel.value;
   sel.innerHTML = "";
   for (const m of (sq ? sq.missions : [])) {
-    if (m === "CSAR") continue;   // rescues are planned automatically for downed pilots
+    if (m === "CSAR" || m === "AWACS") continue;   // rescues are planned automatically for downed pilots
     const o = document.createElement("option");
     o.value = o.textContent = m;
     sel.appendChild(o);
@@ -663,7 +663,7 @@ function renderPlan() {
   const sqSel = $("p-squadron"), keepSq = sqSel.value;
   sqSel.innerHTML = "";
   for (const sq of s.squadrons) {
-    if (sq.side !== "blue" || !sq.total) continue;
+    if (sq.side !== "blue" || !sq.total || sq.support) continue;
     const o = document.createElement("option");
     o.value = sq.id;
     o.textContent = `${sq.type} · ${sq.base} · ${sq.available} ready${s.ai_only.includes(sq.type) ? " · AI" : ""}`;

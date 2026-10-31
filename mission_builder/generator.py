@@ -642,7 +642,7 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
         country = B.blue if a["side"] == "blue" else B.red
         ptype = unit_type(a["type"])
         mission = a["mission"] if a["mission"] in PAYLOAD_KEYWORDS else "CAP"
-        maintask = _main_task(ptype, mission)
+        maintask = task.AWACS if a["mission"] == "AWACS" else _main_task(ptype, mission)
         alt, kmh = a["alt"], a["speed"] * 3.6
         g = B.m.flight_group_inflight(country, f"MBF:{a['id']}", ptype, Point(a["x"], a["y"], B.terrain), alt, kmh,
                                       maintask=maintask, group_size=a["count"])
@@ -651,7 +651,14 @@ def add_ambient(B: "_Builder", flights: list[dict]) -> None:
             B.tracked_units.append(u.name)
             if country is B.red:
                 u.skill = B.skill
-        loadout, stores = _arm(g, ptype, mission, maintask, a.get("loadout", ""))
+        loadout, stores = ("", []) if a["mission"] == "AWACS" else _arm(g, ptype, mission, maintask, a.get("loadout", ""))
+        if a["mission"] == "AWACS":
+            g.points[0].tasks.append(task.AWACSTaskAction())
+            if country is B.blue:   # the player's picture calls
+                g.set_frequency(251)
+                B.b.support.append({"role": "AWACS", "callsign": a["callsign"], "type": a["type"], "freq": "251.000",
+                                    "tacan": None, "alt_ft": round(a["alt"] * M_TO_FT, -2),
+                                    "track": [{"lat": wp["ll"][0], "lon": wp["ll"][1]} for wp in a["route"][:2] if wp.get("ll")]})
         if a.get("fuel") is not None:  # as DCS left it after the last mission
             for u in g.units:
                 u.fuel = round(ptype.fuel_max * max(0.05, min(1.0, a["fuel"])))

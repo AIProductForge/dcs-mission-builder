@@ -189,6 +189,11 @@ spirit of Falcon BMS's dynamic campaign:
   engine settles the rest. Tested in DCS (2026-10-28): Iskanders, Tu-95MS/Kh-555, Tu-160/Kh-65
   and Wing Loongs fire at land targets; a ground launcher fires at a set time from a pushed fire order
   (2026-10-29: an Iskander launches about 55 s after the order, which goes out that much early). In 10-day test wars red fired 215-335, about two-thirds were shot down.
+- **AWACS.** Each side keeps one aircraft (E-3A, A-50) orbiting behind its front, planned
+  automatically for 4 hours at a time. A CAP looking at a flight inside its side's AWACS coverage
+  (370 km) detects out to 120 km instead of 80, and more often. Now and then the other side sends a
+  fighter pair to hunt it. Both are real AWACS in DCS missions; a blue one on the ATO replaces the
+  generic OVERLORD and answers on 251 MHz. The numbers are estimates.
 - **Weaponeering** (`mission_builder/weaponeering.py`). Each strike flight's weapons are matched
   to the units of its target: units in priority order (on a SAM site its radars first, then
   launchers with their own radar, then the rest), each gets the best weapon on board for that

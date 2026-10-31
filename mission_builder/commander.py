@@ -162,6 +162,13 @@ def _system_info(s: dict) -> dict:
     return out
 
 
+def _awacs_state(c: Campaign) -> list[dict]:
+    w = c.data["war"]
+    return [{"side": "friendly" if f["side"] == "blue" else "enemy", "callsign": f["callsign"], "type": f["type"],
+             "status": f["status"], "note": "planned automatically; CAP under it detects further; a CAP station near an "
+             "enemy one will hunt it"} for f in w["flights"] if f["mission"] == "AWACS" and f["status"] in ("planned", "airborne")]
+
+
 def situation(c: Campaign, loadouts) -> dict:
     """The campaign as the commander needs it. loadouts(type) -> [(name, [stores])]."""
     w = c.data["war"]
@@ -176,6 +183,8 @@ def situation(c: Campaign, loadouts) -> dict:
                       "covered_by": _defences(c, s), **_system_info(s)})
     squadrons = []
     for sq in w["squadrons"]:
+        if sq.get("support"):   # AWACS: planned automatically, not fragged
+            continue
         if sq["side"] != "blue" or sq["total"] <= 0:
             continue
         reach = (war.SOF_RANGE if "SOF" in sq["missions"] else war.BOMBER_RANGE if sq.get("manual")
@@ -204,7 +213,7 @@ def situation(c: Campaign, loadouts) -> dict:
         "day": int(war.clock_label(c).split()[1]), "night_now": war.is_night(c, w["clock"]),
         "airfields": [{"name": n, "side": side, **({"capture_needs": _needs(c, n)} if side == "red" else {})}
                       for n, side in sorted(c.data["fields"].items())],
-        "enemy_sites": sites, "friendly_squadrons": squadrons, "enemy_fighters_airborne": caps,
+        "awacs": _awacs_state(c), "enemy_sites": sites, "friendly_squadrons": squadrons, "enemy_fighters_airborne": caps,
     }
 
 
