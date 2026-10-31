@@ -45,7 +45,7 @@ ALT = {"jet": 6500, "heli": 120}
 RANGE = {"jet": 650_000, "heli": 130_000}
 # Attacks per half-hour plan. Red strikes every other plan (one an hour): the baselines give the
 # blue side far fewer SAMs, and at two an hour red overran blue in 1-3 days in simulation.
-ATTACKS_PER_PLAN = {"blue": 1, "red": 1}
+ATTACKS_PER_PLAN = {"blue": 0.5, "red": 1}   # blue at half: without the player it advances slowly (10-day runs end about 5-3)
 REPAIR_HOURS = (12, 30)             # a destroyed site is back in action this long after, unless its field falls
 KEEP_FINISHED = 2 * 3600            # finished flights stay on the ATO this long
 
