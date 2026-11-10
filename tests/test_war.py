@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 logging.disable(logging.ERROR)
 from mission_builder import campaign, server, systems, war, weaponeering as W  # noqa: E402
+from mission_builder import generator as G  # noqa: E402
 
 server.save_config = lambda c: None
 
@@ -38,6 +39,22 @@ class Weaponeering(unittest.TestCase):
         plan = W.weaponeer(["2x GBU-27"], 2, sa10, accuracy=0.8)
         self.assertEqual([units for units in (sa10[a["unit"]] for a in plan)], sa10[:2])
         self.assertGreater(W.p_destroyed(plan, sa10), 0.3)
+
+    def test_damaged_sa10_with_a_launcher_keeps_its_command_post(self):
+        for strength in (0.15, 0.29, 0.43, 0.5, 0.57, 0.71, 0.86, 1.0):
+            ids = [u.id for u in systems.units_for("SA-10", strength)]
+            if any(i.endswith(" ln") for i in ids):
+                self.assertIn("S-300PS 54K6 cp", ids)
+                self.assertIn("S-300PS 40B6M tr", ids)
+
+    def test_sa10_faces_the_opposing_field(self):
+        airport = next(iter(G.TERRAINS["PersianGulf"]().airports))
+        B = G._Builder(G.MissionSpec(terrain="PersianGulf", aircraft="F-16C_50", airport=airport, seed=1))
+        pos = B.home.position.point_from_heading(40, 100_000)
+        want = pos.heading_between_point(B.home.position)
+        for strength in (0.57, 1.0):
+            for u in B.ground("SA-10", systems.units_for("SA-10", strength), pos).units:
+                self.assertAlmostEqual(u.heading % 360, want % 360, places=3)
 
     def test_expend_is_a_dcs_step(self):
         for a in W.weaponeer(["20x AGM-86D"], 2, ["T-72B"] * 7):

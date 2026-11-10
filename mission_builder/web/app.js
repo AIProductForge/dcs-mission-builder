@@ -1,6 +1,6 @@
 "use strict";
 
-const FIELDS = ["aircraft", "terrain", "airport", "mission_type", "complexity", "loadout", "start", "flight_size",
+const FIELDS = ["aircraft", "terrain", "airport", "story", "mission_type", "complexity", "loadout", "start", "flight_size",
                 "date", "hour", "weather", "enemy_skill", "awacs", "tanker"];
 const PIN_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10.5 1.5 14.5 5.5 12.6 6.1 9.9 8.8 10.2 12 8.9 13.3 6.2 10.6 2.6 14.2 1.8 13.4 5.4 9.8 2.7 7.1 4 5.8 7.2 6.1 9.9 3.4z"/></svg>';
 
@@ -186,6 +186,7 @@ function loadoutLabel(name) { return name.replace(/^Liberation\s+/i, ""); }
 async function setValues(v) {
   el("aircraft").value = v.aircraft;
   el("terrain").value = v.terrain;
+  el("story").value = v.story || "";
   renderCampaign();
   await refreshAirports(v.airport);
   refreshMissionTypes(v.mission_type);
@@ -202,7 +203,7 @@ async function setValues(v) {
 }
 
 function renderPins() {
-  for (const node of document.querySelectorAll(".field")) {
+  for (const node of document.querySelectorAll(".field:not(.nopin)")) {
     const pinned = state.locks.has(node.dataset.field);
     node.classList.toggle("pinned", pinned);
     const btn = node.querySelector(".pin");
@@ -212,7 +213,7 @@ function renderPins() {
 }
 
 function setupPins() {
-  for (const node of document.querySelectorAll(".field")) {
+  for (const node of document.querySelectorAll(".field:not(.nopin)")) {
     const f = node.dataset.field;
     const btn = document.createElement("button");
     btn.type = "button";
@@ -227,6 +228,7 @@ function setupPins() {
     node.appendChild(btn);
     el(f).addEventListener("change", async () => {
       state.locks.add(f);
+      if (f === "story" && !el("story").value) state.locks.delete("story");  // Random is not a pin
       if (f === "airport") state.locks.add("terrain");
       if (f === "terrain") renderCampaign();
       if (["terrain", "aircraft"].includes(f)) {
@@ -240,23 +242,180 @@ function setupPins() {
         if (f === "aircraft" && el("loadout").value !== keep) state.locks.delete("loadout");
       }
       renderPins();
-      setStatus("Edited. Generate to reroll the rest, or Apply edits to keep this exact mission.");
+      setStatus(state.tab === "strike" ? "Edited. Generate strike to use this; the mission built now hasn't changed."
+                                       : "Edited. Generate to reroll the rest, or Apply edits to keep this exact mission.");
     });
   }
 }
 
+// ---------- tabs ----------
+function showTab(tab) {
+  const strike = tab === "strike", custom = tab === "custom", camp = tab === "campaign";
+  for (const b of document.querySelectorAll(".tab")) {
+    b.classList.toggle("active", b.dataset.tab === tab);
+    b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  }
+  const show = (f, on) => { document.querySelector(`[data-field="${f}"]`).hidden = !on; };
+  show("story", strike);
+  show("mission_type", custom);
+  show("complexity", !camp);   // a campaign sets each mission's complexity from its difficulty
+  show("op_length", camp);
+  show("op_difficulty", camp);
+  $("btn-strike").hidden = !strike;
+  $("btn-generate").hidden = !custom;
+  $("btn-apply").hidden = !custom;
+  for (const id of ["btn-op-new", "btn-op-next", "btn-op-check", "ops"]) $(id).hidden = !camp;
+  // On the custom tab every option is on the page; on the others the rest fold into Settings.
+  const settings = $("settings");
+  settings.classList.toggle("flat", custom);
+  settings.open = custom;
+  try { localStorage.setItem("tab", tab); } catch (e) { /* remembered only when storage works */ }
+  state.tab = tab;
+  showSave();
+}
+
+// There is one built mission on the server, so Save only offers it on the tab that built it.
+function showSave() {
+  const b = $("btn-save");
+  if (state.campaignFlight) return;
+  b.disabled = state.built !== state.tab;
+  b.textContent = { strike: "Save strike .miz", custom: "Save custom .miz", campaign: "Save campaign mission .miz" }[state.tab];
+  if (state.built && state.built !== state.tab) {
+    setStatus({ strike: "The mission built now is from another tab. Generate a strike here to save a strike.",
+                custom: "The mission built now is from another tab. Generate or Apply edits here to save a custom mission.",
+                campaign: "The mission built now is from another tab. Click Next mission to build this campaign's next one." }[state.tab]);
+  }
+}
+
+// ---------- generated campaigns ----------
+const STATUS_LABELS = { planned: "Planned", saved: "Saved, not flown", success: "Won", failed: "Lost: fly again" };
+
+function selectedOp() { return (state.ops || []).find((c) => c.id === $("op-select").value); }
+
+function renderOps(keepId) {
+  const sel = $("op-select");
+  const list = state.ops || [];
+  fillSelect(sel, list, (c) => `${c.name} · ${c.values.aircraft} · ${c.values.terrain} · ${c.length}, ${c.difficulty}`, (c) => c.id);
+  if (keepId && list.some((c) => c.id === keepId)) sel.value = keepId;
+  const c = selectedOp();
+  const ol = $("op-missions");
+  ol.innerHTML = "";
+  $("btn-op-next").disabled = !c || c.complete;
+  if (!c) {
+    $("op-progress").textContent = "";
+    ol.innerHTML = '<li class="ops-empty">No campaign yet. Pick an aircraft, map, length and difficulty, then New campaign.</li>';
+    return;
+  }
+  try { localStorage.setItem("op", c.id); } catch (e) { /* remembered only when storage works */ }
+  $("op-progress").textContent = c.complete ? `Complete: ${c.won} of ${c.total} won.` : `${c.won} of ${c.total} won · next: mission ${c.next}`;
+  for (const m of c.missions) {
+    const li = document.createElement("li");
+    li.className = m.n === c.next ? "next" : "";
+    li.innerHTML = '<span class="n"></span><span class="what"></span><span class="st"></span><span class="marks"></span>';
+    li.querySelector(".n").textContent = `${m.n}.`;
+    li.querySelector(".what").textContent = `${storyLabel(m.story)} · complexity ${m.complexity}` +
+      (m.attempts > 1 ? ` · ${m.attempts} attempts` : "");
+    const st = li.querySelector(".st");
+    st.textContent = STATUS_LABELS[m.status] || m.status;
+    st.classList.add(m.status);
+    if (m.status === "saved" || m.status === "failed") {   // a flight its triggers didn't decide: mark it by hand
+      for (const [label, result] of [["Won", "success"], ["Lost", "failed"]]) {
+        if (m.status === result) continue;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn ghost";
+        btn.textContent = label;
+        btn.title = `Mark mission ${m.n} as ${label.toLowerCase()}`;
+        btn.addEventListener("click", () => markOp(c.id, m.n, result));
+        li.querySelector(".marks").appendChild(btn);
+      }
+    }
+    ol.appendChild(li);
+  }
+}
+
+async function loadOps() {
+  let keep = null;
+  try { keep = localStorage.getItem("op"); } catch (e) { /* none remembered */ }
+  state.ops = (await api("/api/ops")).campaigns;
+  renderOps(keep);
+}
+
+async function newOp() {
+  if (state.busy) return;
+  state.busy = true;
+  setStatus("Planning the campaign…");
+  try {
+    const res = await api("/api/ops/new", { values: getValues(), locks: [...state.locks],
+                                            length: el("op_length").value, difficulty: el("op_difficulty").value });
+    state.ops = res.campaigns;
+    renderOps(res.campaign.id);
+    setStatus(`${res.campaign.name}: ${res.campaign.total} missions planned for the ${res.campaign.values.aircraft} ` +
+              `from ${res.campaign.values.airport}. Next mission builds the first one.`, "ok");
+  } catch (e) {
+    setStatus(e.message, "err");
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function nextOp() {
+  const c = selectedOp();
+  if (!c || state.busy) return;
+  state.busy = true;
+  $("doc").classList.add("busy");
+  setStatus("Building the next mission…");
+  try {
+    const res = await api("/api/ops/next", { id: c.id });
+    await setValues(res.values);
+    renderBriefing(res.briefing, res.values);
+    state.built = "campaign";
+    showSave();
+    $("b-file").textContent = "NOT YET SAVED";
+    setStatus(`Ready: mission ${res.campaign.next} of ${res.campaign.total}, OPERATION ${res.briefing.codename}. ` +
+              "Save it, fly it, then Check results.", "ok");
+  } catch (e) {
+    setStatus(e.message, "err");
+  } finally {
+    state.busy = false;
+    $("doc").classList.remove("busy");
+  }
+}
+
+async function checkOps() {
+  try {
+    const res = await api("/api/ops/check", {});
+    state.ops = res.campaigns;
+    renderOps($("op-select").value);
+    setStatus(res.changes.length ? res.changes.join(" ") : "No new results in dcs.log. If a flight ended before its " +
+              "mission was decided, mark it Won or Lost.", res.changes.length ? "ok" : "");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function markOp(id, n, result) {
+  try {
+    state.ops = (await api("/api/ops/mark", { id, n, result })).campaigns;
+    renderOps(id);
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+const STORY_LABELS = { "": "Random", corridor: "SAM corridor", scud_hunt: "Scud hunt", convoy: "Convoy", hvt: "High-value target",
+                       rescue: "Rescue", airfield: "Airfield raid" };
+function storyLabel(s) { return STORY_LABELS[s] || s; }
+
 // ---------- generate / save ----------
-async function generate(lockEverything = false) {
+async function generate(lockEverything = false, path = "/api/generate") {
   if (state.busy) return;
   state.busy = true;
   $("doc").classList.add("busy");
   setStatus(lockEverything ? "Applying edits…" : "Generating…");
   const locks = lockEverything ? [...FIELDS, "seed"] : [...state.locks];
   try {
-    const res = await api("/api/generate", { values: getValues(), locks });
+    const res = await api(path, { values: getValues(), locks });
     await setValues(res.values);
     renderBriefing(res.briefing, res.values);
-    $("btn-save").disabled = false;
+    state.built = path === "/api/strike" ? "strike" : "custom";
+    showSave();
     $("b-file").textContent = "NOT YET SAVED";
     setStatus(`Ready: OPERATION ${res.briefing.codename}. Save .miz when you're happy with it.`, "ok");
   } catch (e) {
@@ -271,6 +430,11 @@ async function save() {
   try {
     const res = await api("/api/save", {});
     $("b-file").textContent = res.path.toUpperCase();
+    if (res.op) {   // a campaign mission: saved once, so Next mission builds a fresh attempt
+      await loadOps();
+      state.built = null;
+      showSave();
+    }
     setStatus(`Saved ${res.path}` + (res.sortie ? ". Fly it and the campaign updates when the flight ends." : ""), "ok");
     takeCampaigns(await api("/api/campaign"));
   } catch (e) {
@@ -548,6 +712,11 @@ async function boot() {
   fillSelect(el("aircraft"), o.aircraft, aircraftLabel, (a) => a.id);
   fillSelect(el("terrain"), o.terrains);
   fillSelect(el("mission_type"), o.mission_types);
+  fillSelect(el("story"), ["", ...o.stories], storyLabel);
+  fillSelect(el("op_length"), Object.entries(o.campaign_lengths), ([k, n]) => `${k} (${n} missions)`, ([k]) => k);
+  el("op_length").value = "Medium";
+  fillSelect(el("op_difficulty"), o.difficulties);
+  el("op_difficulty").value = "Normal";
   state.campaigns = o.campaigns || {};
   el("complexity").addEventListener("input", showComplexity);
   fillSelect(el("start"), o.starts);
@@ -570,6 +739,17 @@ async function boot() {
   }
   renderPins();
 
+  for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => showTab(b.dataset.tab));
+  let tab = "strike";
+  try { tab = ["custom", "campaign"].includes(localStorage.getItem("tab")) ? localStorage.getItem("tab") : "strike"; }
+  catch (e) { /* first tab */ }
+  showTab(tab);
+  $("btn-strike").addEventListener("click", () => generate(false, "/api/strike"));
+  $("btn-op-new").addEventListener("click", newOp);
+  $("btn-op-next").addEventListener("click", nextOp);
+  $("btn-op-check").addEventListener("click", checkOps);
+  $("op-select").addEventListener("change", () => renderOps($("op-select").value));
+  await loadOps();
   $("btn-generate").addEventListener("click", () => generate(false));
   $("btn-apply").addEventListener("click", () => generate(true));
   $("btn-save").addEventListener("click", save);
@@ -587,6 +767,8 @@ async function boot() {
       state.locks = new Set(FIELDS);
       renderPins();
       renderBriefing(cur.briefing, cur.values);
+      state.campaignFlight = true;
+      showTab("custom");
       $("btn-save").disabled = true;
       setStatus("Campaign flight. Its .miz is already saved; fly it in DCS.", "ok");
       return;
@@ -594,7 +776,7 @@ async function boot() {
   }
   // Pick up flights as they finish (the server reads dcs.log on each call).
   setInterval(() => api("/api/campaign").then(takeCampaigns).catch(() => {}), 20000);
-  await generate(false);
+  if (tab !== "campaign") await generate(false, tab === "strike" ? "/api/strike" : "/api/generate");
 }
 
 boot().catch((e) => setStatus(e.message, "err"));

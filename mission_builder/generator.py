@@ -17,6 +17,7 @@ MissionSpec into a pydcs Mission and a Briefing (plain data for the UI).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import random
 import re
 from dataclasses import asdict, dataclass, field, fields
@@ -31,6 +32,7 @@ from dcs.statics import Fortification
 from dcs.terrain.terrain import NoParkingSlotError
 from dcs.triggers import TriggerOnce, TriggerStart
 from dcs.unit import Skill
+from dcs.unitgroup import StaticGroup
 
 from .inventory import TERRAINS
 from . import campaign, systems, weaponeering
@@ -94,6 +96,7 @@ class MissionSpec:
     spawn_xy: list = field(default_factory=list)    # joining a flight in the air: where it is now
     rtb: bool = False              # ...and its target is already behind it
     site_systems: dict = field(default_factory=dict)  # campaign site id -> [system, strength]
+    story: str = ""                # strike generator story (strike.STORIES); "" = rolled from the seed
 
     @classmethod
     def from_dict(cls, d: dict) -> "MissionSpec":
@@ -413,6 +416,7 @@ class Briefing:
     tracked: dict = field(default_factory=dict)          # enemy site id -> units placed on it
     radars: dict = field(default_factory=dict)           # site id -> names of its radar units (a SAM is out without them)
     front: list = field(default_factory=list)            # airfields with their owner, for the map
+    story_id: str = ""                                   # strike story: its MBSTORY lines in dcs.log carry this
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -492,6 +496,7 @@ class _Builder:
         self.n = 0  # unique-name counter
         self.tracked_units: list[str] = []  # units on campaign sites, named "MB:<site>:..."
         self.site_groups: dict[str, list] = {}  # campaign site id -> vehicle groups placed on it
+        self.static_flags: list = []  # (static group, flag set by add_static_watch when it dies)
 
     def name(self, base: str) -> str:
         self.n += 1
@@ -548,11 +553,27 @@ class _Builder:
             if weaponeering.target_class(unit.type) == "radar":
                 self.b.radars.setdefault(site, []).append(unit.name)
 
+    def facing(self, types, pos: Point, country) -> float:
+        """A site's heading. An SA-10 faces the nearest opposing field: flown in DCS, one ignored a jet
+        behind it until 5.7 km but fired at 57 km on a jet ahead. Anything else faces at random."""
+        heading = self.rng.uniform(0, 360)
+        if vehicles.AirDefence.S_300PS_40B6M_tr not in types:
+            return heading
+        names = (self.friendly_fields if country is self.red else self.enemy_fields) or []
+        fields_ = [self.terrain.airports[n].position for n in names if n in self.terrain.airports]
+        if country is self.red:   # the player's own field is always an opposing one
+            fields_.append(self.home.position)
+        if not fields_:
+            return heading
+        return pos.heading_between_point(min(fields_, key=pos.distance_to_point))
+
     def ground(self, label: str, types, pos: Point, country=None, late=False, spread=60, site=None):
         country = country or self.red
-        g = self.m.vehicle_group_platoon(country, self.name(label), types, pos, heading=self.rng.uniform(0, 360))
+        heading = self.facing(types, pos, country)
+        g = self.m.vehicle_group_platoon(country, self.name(label), types, pos, heading=heading)
         for i, u in enumerate(g.units):  # spread units out so a site isn't one stacked pile
             u.position = pos.point_from_heading(self.rng.uniform(0, 360), spread * (i > 0) * (1 + i * 0.5))
+            u.heading = heading
             if country is self.red:
                 u.skill = self.skill
             self.track(u, site)
@@ -616,9 +637,43 @@ class _Builder:
             self.b.triggers.append(f"{comment} when you come within {round(radius_m * M_TO_NM)} nm of the objective.")
         return zone
 
+    def dead_condition(self, g):
+        """True once this group is dead. Not GroupDead for a static: flown 2026-11-01, four GroupDead
+        conditions on static groups came true about 90 s in, with all four buildings still standing."""
+        if not isinstance(g, StaticGroup):
+            return condition.GroupDead(g.id)
+        flag = 500 + len(self.static_flags)
+        self.static_flags.append((g, flag))
+        return condition.FlagIsTrue(flag)
+
+    def add_static_watch(self):
+        """Lua that sets each watched static's flag when it is gone, by results_script's test of alive."""
+        if not self.static_flags:
+            return
+        watch = ",".join(f"[{json.dumps(g.units[0].name)}]={flag}" for g, flag in self.static_flags)
+        t = TriggerStart(comment="Watch buildings")
+        t.add_action(InlineDoScript(f"""
+do
+  local watch = {{{watch}}}
+  local function check(_, t)
+    for n, f in pairs(watch) do
+      local o = StaticObject.getByName(n)
+      local ok, a = pcall(function() return o ~= nil and o:isExist() and o:getLife() >= 1 end)
+      if not (ok and a) then
+        trigger.action.setUserFlag(tostring(f), 1)
+        env.info("MBSTORY|building dead " .. n)
+        watch[n] = nil
+      end
+    end
+    return t + 5
+  end
+  timer.scheduleFunction(check, nil, timer.getTime() + 5)
+end"""))
+        self.m.triggerrules.triggers.append(t)
+
     def success_when_dead(self, groups, text: str):
         if groups:
-            self.message_rule("Mission success", [condition.GroupDead(g.id) for g in groups], text,
+            self.message_rule("Mission success", [self.dead_condition(g) for g in groups], text,
                               then=[action.SetFlag(1)], seconds=30)
 
 
@@ -1149,6 +1204,7 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
                     "Intercept": "Raid destroyed. Good work. RTB."}.get(mt)
     if success_text:
         B.success_when_dead(B.target_groups, success_text)
+        B.add_static_watch()
 
     # ---- support ----
     behind = home.position.point_from_heading(heading_out + 180, 40000)

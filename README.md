@@ -3,14 +3,19 @@
 Generates single-player `.miz` files for the aircraft you own, without the Mission Editor.
 
 Start it with **DCS Mission Builder.bat**. It opens in your browser at http://127.0.0.1:8765
-as a mission briefing document: tasking fields on the left, the briefing (situation, mission,
-route table, map, threats, support, command & signal) on the right.
+as one page: tasking at the top in three tabs, the briefing (situation, mission, route table,
+map, threats, support, command & signal) below.
 
-- **Generate** rerolls every field that isn't pinned. Changing a field pins it automatically;
-  click the pin to toggle. Pinning the home field also pins its map.
-- **Apply edits** rebuilds with exactly the current values, keeping the same layout and codename.
-- **Save .miz** writes the mission you're looking at to `Saved Games\DCS\Missions\Generated`,
-  so it shows up in DCS under Mission → My Missions → Generated.
+- **Generate strike**: aircraft, theatre, mission (a strike story, or Random) and complexity; the
+  other options are under Settings. See *Strike stories* below.
+- **Custom mission**: every option on the page, with the classic mission types. **Generate**
+  rerolls every field that isn't pinned; **Apply edits** rebuilds with exactly the current values.
+- **Campaign**: a run of 6, 10 or 15 strike missions. See *Generated campaigns* below.
+- Changing a field pins it automatically; click the pin to toggle. Pinning the home field also
+  pins its map. Pins are shared by all three tabs.
+- **Save** writes the mission built on the tab you're on to `Saved Games\DCS\Missions\Generated`,
+  so it shows up in DCS under Mission → My Missions → Generated. It is greyed out when the
+  mission built last came from another tab.
 - The page prints cleanly (Ctrl+P) as a kneeboard-style briefing.
 - Closing the tab is enough: the server stops itself a minute later.
 
@@ -26,6 +31,39 @@ panel says so and everything else still works.
   the selected aircraft, with the ones suited to the mission type first; when it isn't pinned,
   Generate picks a random suited one. The briefing lists the stores per aircraft. F-5E, F-86F,
   MiG-15 and TF-51D have no stored loadouts and fly with guns only.
+
+## Strike stories
+A strike mission is built from a story: a target, the other flights in the package and the
+enemy's reaction, linked by triggers so what you do changes what happens next.
+
+| Story | What links the events |
+|---|---|
+| SAM corridor | HAMMER's follow-on strike launches only once the SAM is dead; if VIPER (SEAD) dies first, it holds |
+| Scud hunt | A launcher fires on your base at a deadline set from your flight time; killing it reveals a second |
+| Convoy | Hitting the convoy scrambles fighters; it fails if the convoy reaches the front |
+| High-value target | If the early-warning radar sees you, fighters scramble and the party runs; kill the radar first and neither happens |
+| Rescue | PEDRO (UH-1H) comes in only when the search party and ZSU are dead; fails if they reach the pilot |
+| Airfield raid | A second wave launches if the first dies while the ops centre still stands |
+
+Complexity adds up to three complications: an egress ambush (50%, rolled in DCS), a raid on your
+home field, a pop-up SAM, a follow-on target (60%, rolled in DCS). Every event writes
+`MBSTORY|<story id>|<event>` to dcs.log, and the result `MBSTORY|<story id>|RESULT|success|failed`.
+
+Buildings are checked by a small script every 5 s, not DCS's Group Dead condition: flown on
+2026-11-01, Group Dead on static objects came true about 90 s in with every building standing.
+The script has not been flown yet; nor have the convoy, HVT, rescue and airfield stories.
+
+## Generated campaigns
+The **Campaign** tab plans a run of strike missions for one aircraft, map and home field:
+Short (6), Medium (10) or Long (15), at Easy, Normal, Hard or Very hard. Difficulty sets the
+enemy skill and the first mission's complexity; complexity climbs by up to two levels toward the
+end. Stories rotate without repeating back to back, and the last mission is always the airfield
+raid (helicopters: the high-value target). **Next mission** builds the next one; save and fly it,
+then **Check results** reads the RESULT line from dcs.log. A lost mission is flown again with a new
+layout. A flight that ended before its mission was decided can be marked Won or Lost by hand.
+
+Generated campaigns are kept in `campaigns_gen/` (not in git). They are separate from the live
+war on the campaign map below: results don't carry between missions, and don't change the war.
 
 ## Campaigns (one per map)
 Each map runs one persistent campaign, started from one DCS Liberation campaign file used as the
@@ -286,9 +324,13 @@ Date matters for some systems: the Modern F-15E SIT/JTIDS mod needs a mission da
 - `mission_builder/war.py`: the air war: clock, squadrons, ATO planning, auto-resolution, plan odds
 - `mission_builder/commander.py`: the air commander (Claude API): situation, courses of action, checks
 - `mission_builder/generator.py`: builds the mission (no UI, can be scripted)
+- `mission_builder/strike.py`: strike stories, their trigger chains and complications
+- `mission_builder/campaign_gen.py`: generated campaigns: planning, saving, results from dcs.log
 - `mission_builder/server.py`: local web server and JSON API (127.0.0.1 only)
 - `mission_builder/web/`: the briefing page (`index.html`) and the campaign map (`war.html`)
 - `mission_builder/app.py`: the old Tkinter window (superseded, still works)
 - `config.json`: paths (including `dcs_logs`) and your last choices
 - `campaign/`: each map's campaign state
+- `campaigns_gen/`: generated campaigns
+- `tests/`: `.venv/Scripts/python -m unittest discover tests`
 - `.venv`: private Python with pydcs pinned to commit 03dd89f (the version Liberation 15.0.0 uses)

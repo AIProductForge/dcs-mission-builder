@@ -84,8 +84,9 @@ class State:
         self.config = config
         dcs_dir = Path(config["dcs_dir"])
         configure_payloads(dcs_dir, Path(config["liberation_payloads"]))
-        from . import generator
-        self.gen = generator
+        from . import campaign_gen, generator, strike
+        self.gen, self.strike, self.ops = generator, strike, campaign_gen
+        self.current_op = None     # (campaign id) when the built mission is a generated campaign's next one
         owned = owned_aircraft(dcs_dir)
         self.owned = [a.type_id for a in owned]
         self.modules = {a.type_id: a.module_folder for a in owned}
@@ -212,6 +213,9 @@ class State:
             "aircraft": [{"id": a, "module": self.modules[a], "helicopter": g.is_helicopter(a)} for a in self.owned],
             "terrains": self.terrains,
             "mission_types": g.MISSION_TYPES,
+            "stories": list(self.strike.STORIES),
+            "campaign_lengths": {k: v for k, v in self.ops.LENGTHS.items()},
+            "difficulties": list(self.ops.DIFFICULTY),
             "helicopter_missions": g.HELICOPTER_MISSIONS,
             "campaigns": self.campaign_state(),
             "complexity_names": g.COMPLEXITY_NAMES,
@@ -230,10 +234,33 @@ class State:
             if c and not c.fields_of("red"):
                 raise RuntimeError(f"The {spec.terrain} campaign is won. Reset it to fight there again.")
             spec, mission, briefing = g.build_with_retries(spec, locks, self.owned, self.terrains)
-            self.current = (spec, mission, briefing)
+            self.current, self.current_op = (spec, mission, briefing), None
             self.config["last"] = {"values": asdict(spec), "locks": sorted(locks)}
             save_config(self.config)
             return {"values": asdict(spec), "briefing": briefing.to_dict()}
+
+    def generate_strike(self, values: dict, locks: set[str]) -> dict:
+        """A strike story: pinned fields, the story among them, are kept and the rest is rolled."""
+        g, strike = self.gen, self.strike
+        with self.lock:
+            values = {**values, "mission_type": "Strike", "story": values.get("story", "") if "story" in locks else ""}
+            locks = (locks | {"mission_type"}) - {"seed"}
+            for _ in range(6):
+                spec = g.randomize(values, locks, self.owned, self.terrains, modules=self.modules)
+                if g.is_helicopter(spec.aircraft) and spec.story not in strike.HELICOPTER_STORIES:
+                    spec.story = ""
+                c = self.campaigns.get(spec.terrain)
+                if c and not c.fields_of("red"):
+                    raise RuntimeError(f"The {spec.terrain} campaign is won. Reset it to fight there again.")
+                try:
+                    mission, briefing = strike.build(spec)
+                except g.NoParkingSlotError:
+                    continue
+                self.current, self.current_op = (spec, mission, briefing), None
+                self.config["last"] = {"values": asdict(spec), "locks": sorted(locks - {"mission_type"})}
+                save_config(self.config)
+                return {"values": asdict(spec), "briefing": briefing.to_dict()}
+            raise RuntimeError("No parking for this flight. Unpin the airfield or reduce the flight size.")
 
     def save(self) -> dict:
         with self.lock:
@@ -248,7 +275,66 @@ class State:
             if c and briefing.sortie and not any(x["id"] == briefing.sortie for x in c.data["sorties"]):
                 c.register_sortie(briefing.sortie, str(path), briefing.mission_type, spec.aircraft, briefing.tracked,
                                   flight=spec.flight, radars=briefing.radars)
-            return {"path": str(path), "sortie": briefing.sortie}
+            op = None
+            if self.current_op:
+                op = self.ops.load(self.current_op)
+                self.ops.record_save(op, briefing.story_id, str(path))
+                self.current_op = None   # saved once: generate it again to save another attempt
+                op = self.ops.summary(op)
+            return {"path": str(path), "sortie": briefing.sortie, "op": op}
+
+    # --- generated campaigns ---------------------------------------------------------------
+
+    def ops_list(self) -> dict:
+        return {"campaigns": [self.ops.summary(c) for c in self.ops.all_()]}
+
+    def ops_new(self, values: dict, locks: set[str], length: str, difficulty: str) -> dict:
+        """Fix the aircraft, map and home field (pins kept, the rest rolled) and plan the missions."""
+        g = self.gen
+        if length not in self.ops.LENGTHS or difficulty not in self.ops.DIFFICULTY:
+            raise RuntimeError("Pick a campaign length and difficulty.")
+        with self.lock:
+            spec = g.randomize({**values, "mission_type": "Strike"}, locks | {"mission_type"}, self.owned, self.terrains,
+                               modules=self.modules)
+            codename = f"{random.choice(g.CODENAME_A)} {random.choice(g.CODENAME_B)}"
+            c = self.ops.new(asdict(spec), length, difficulty, g.is_helicopter(spec.aircraft), codename)
+            return {"campaign": self.ops.summary(c), **self.ops_list()}
+
+    def ops_next(self, cid: str) -> dict:
+        """Build the campaign's next mission; Save then records it against the campaign."""
+        g = self.gen
+        with self.lock:
+            c = self.ops.load(cid)
+            values = self.ops.next_values(c)
+            spec = g.MissionSpec.from_dict(values)
+            for attempt in range(6):
+                try:
+                    mission, briefing = self.strike.build(spec)
+                    break
+                except g.NoParkingSlotError:   # the home field is full: start in the air instead
+                    spec.start = "In the air"
+            else:
+                raise RuntimeError("No parking for this flight at the campaign's home field.")
+            m = self.ops.current(c)
+            briefing.mission_type = f"{briefing.mission_type} · {c['name']} {m['n']}/{len(c['missions'])}"
+            self.current, self.current_op = (spec, mission, briefing), cid
+            return {"values": asdict(spec), "briefing": briefing.to_dict(), "campaign": self.ops.summary(c)}
+
+    def ops_check(self) -> dict:
+        logs = Path(self.config["dcs_logs"])
+        texts = [p.read_text(encoding="utf-8", errors="replace") for p in (logs / "dcs.log", logs / "dcs.log.old") if p.exists()]
+        changes = []
+        with self.lock:
+            for c in self.ops.all_():
+                changes += [f"{c['name']}: {x}" for x in self.ops.check(c, texts)]
+        return {"changes": changes, **self.ops_list()}
+
+    def ops_mark(self, cid: str, n: int, result: str) -> dict:
+        if result not in ("success", "failed"):
+            raise RuntimeError("Result must be success or failed.")
+        with self.lock:
+            self.ops.mark(self.ops.load(cid), int(n), result)
+            return self.ops_list()
 
     # --- the air war ------------------------------------------------------------------
 
@@ -471,6 +557,8 @@ def make_handler(state: State):
                     return self._json(200, state.campaign_state())
                 if url.path == "/api/war":
                     return self._json(200, state.war_state(parse_qs(url.query)["theatre"][0]))
+                if url.path == "/api/ops":
+                    return self._json(200, state.ops_list())
                 if url.path == "/api/current":
                     if state.current is None:
                         return self._json(404, {"error": "No mission built yet."})
@@ -507,6 +595,17 @@ def make_handler(state: State):
                     return self._json(200, {"ok": True})
                 if self.path == "/api/generate":
                     return self._json(200, state.generate(body.get("values", {}), set(body.get("locks", []))))
+                if self.path == "/api/ops/new":
+                    return self._json(200, state.ops_new(body.get("values", {}), set(body.get("locks", [])),
+                                                         body.get("length", ""), body.get("difficulty", "")))
+                if self.path == "/api/ops/next":
+                    return self._json(200, state.ops_next(body["id"]))
+                if self.path == "/api/ops/check":
+                    return self._json(200, state.ops_check())
+                if self.path == "/api/ops/mark":
+                    return self._json(200, state.ops_mark(body["id"], body["n"], body["result"]))
+                if self.path == "/api/strike":
+                    return self._json(200, state.generate_strike(body.get("values", {}), set(body.get("locks", []))))
                 if self.path == "/api/save":
                     return self._json(200, state.save())
                 if self.path == "/api/campaign/check":

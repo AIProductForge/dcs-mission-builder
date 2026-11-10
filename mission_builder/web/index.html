@@ -11,42 +11,67 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<aside class="tasking" aria-label="Mission parameters">
-  <header class="tasking-head">
-    <div class="tasking-kicker">DCS MISSION BUILDER · <a href="war.html">Campaign map</a></div>
-    <h1>Tasking</h1>
-    <p class="tasking-hint">Change any field to pin it <span class="lock-inline" aria-hidden="true">●</span>. Generate rerolls everything that isn't pinned.</p>
-  </header>
+<header class="tasking" aria-label="Mission parameters">
+  <div class="tasking-head">
+    <h1>DCS Mission Builder</h1>
+    <a href="war.html">Campaign map</a>
+  </div>
+  <div class="tabs" role="tablist">
+    <button id="tab-strike" class="tab" type="button" role="tab" data-tab="strike">Generate strike</button>
+    <button id="tab-custom" class="tab" type="button" role="tab" data-tab="custom">Custom mission</button>
+    <button id="tab-campaign" class="tab" type="button" role="tab" data-tab="campaign">Campaign</button>
+  </div>
   <form id="form" autocomplete="off" onsubmit="return false">
-    <div class="field" data-field="aircraft"><label for="f-aircraft">Aircraft</label><select id="f-aircraft"></select></div>
-    <div class="field" data-field="terrain"><label for="f-terrain">Theatre</label><select id="f-terrain"></select></div>
-    <div class="field" data-field="airport"><label for="f-airport">Home field</label><select id="f-airport"></select></div>
-    <div class="field" data-field="mission_type"><label for="f-mission_type">Mission</label><select id="f-mission_type"></select></div>
-    <div class="field range" data-field="complexity"><label for="f-complexity">Complexity <output id="complexity-out" for="f-complexity"></output></label>
-      <input id="f-complexity" type="range" min="1" max="5" step="1" list="complexity-ticks">
-      <datalist id="complexity-ticks"><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option></datalist></div>
-    <div class="field" data-field="loadout"><label for="f-loadout">Loadout</label><select id="f-loadout"></select></div>
-    <div class="field" data-field="start"><label for="f-start">Start</label><select id="f-start"></select></div>
-    <div class="field" data-field="flight_size"><label for="f-flight_size">Flight size</label>
-      <select id="f-flight_size"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
-    <div class="field" data-field="date"><label for="f-date">Date</label><input id="f-date" type="date" min="1940-01-01" max="2040-12-31"></div>
-    <div class="field" data-field="hour"><label for="f-hour">Start hour (local)</label>
-      <select id="f-hour"></select></div>
-    <div class="field" data-field="weather"><label for="f-weather">Weather</label><select id="f-weather"></select></div>
-    <div class="field" data-field="enemy_skill"><label for="f-enemy_skill">Enemy skill</label><select id="f-enemy_skill"></select></div>
-    <div class="field check" data-field="awacs"><label for="f-awacs">AWACS</label><input id="f-awacs" type="checkbox"></div>
-    <div class="field check" data-field="tanker"><label for="f-tanker">Tanker</label><input id="f-tanker" type="checkbox"></div>
+    <div class="form-grid">
+      <div class="field" data-field="aircraft"><label for="f-aircraft">Aircraft</label><select id="f-aircraft"></select></div>
+      <div class="field" data-field="terrain"><label for="f-terrain">Theatre</label><select id="f-terrain"></select></div>
+      <div class="field" data-field="story"><label for="f-story">Mission</label><select id="f-story"></select></div>
+      <div class="field nopin" data-field="op_length"><label for="f-op_length">Campaign length</label><select id="f-op_length"></select></div>
+      <div class="field nopin" data-field="op_difficulty"><label for="f-op_difficulty">Difficulty</label><select id="f-op_difficulty"></select></div>
+      <div class="field" data-field="mission_type"><label for="f-mission_type">Mission</label><select id="f-mission_type"></select></div>
+      <div class="field range" data-field="complexity"><label for="f-complexity">Complexity <output id="complexity-out" for="f-complexity"></output></label>
+        <input id="f-complexity" type="range" min="1" max="5" step="1" list="complexity-ticks">
+        <datalist id="complexity-ticks"><option value="1"></option><option value="2"></option><option value="3"></option><option value="4"></option><option value="5"></option></datalist></div>
+    </div>
+    <details id="settings">
+      <summary>Settings</summary>
+      <div class="form-grid">
+        <div class="field" data-field="airport"><label for="f-airport">Home field</label><select id="f-airport"></select></div>
+        <div class="field" data-field="loadout"><label for="f-loadout">Loadout</label><select id="f-loadout"></select></div>
+        <div class="field" data-field="start"><label for="f-start">Start</label><select id="f-start"></select></div>
+        <div class="field" data-field="flight_size"><label for="f-flight_size">Flight size</label>
+          <select id="f-flight_size"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+        <div class="field" data-field="date"><label for="f-date">Date</label><input id="f-date" type="date" min="1940-01-01" max="2040-12-31"></div>
+        <div class="field" data-field="hour"><label for="f-hour">Start hour (local)</label><select id="f-hour"></select></div>
+        <div class="field" data-field="weather"><label for="f-weather">Weather</label><select id="f-weather"></select></div>
+        <div class="field" data-field="enemy_skill"><label for="f-enemy_skill">Enemy skill</label><select id="f-enemy_skill"></select></div>
+        <div class="field check" data-field="awacs"><label for="f-awacs">AWACS</label><input id="f-awacs" type="checkbox"></div>
+        <div class="field check" data-field="tanker"><label for="f-tanker">Tanker</label><input id="f-tanker" type="checkbox"></div>
+      </div>
+    </details>
   </form>
+  <p class="tasking-hint">Changing a field pins it <span class="lock-inline" aria-hidden="true">●</span>. Generating rerolls everything that isn't pinned.</p>
   <div class="actions">
+    <button id="btn-strike" class="btn primary" type="button">Generate strike</button>
     <button id="btn-generate" class="btn primary" type="button">Generate</button>
     <button id="btn-apply" class="btn" type="button" title="Rebuild with exactly these values (same layout)">Apply edits</button>
-    <button id="btn-unlock" class="btn ghost" type="button">Unpin all</button>
+    <button id="btn-op-new" class="btn primary" type="button">New campaign</button>
+    <button id="btn-op-next" class="btn primary" type="button" disabled>Next mission</button>
+    <button id="btn-op-check" class="btn" type="button" title="Read dcs.log for missions won or lost">Check results</button>
     <button id="btn-save" class="btn save" type="button" disabled>Save .miz</button>
+    <button id="btn-unlock" class="btn ghost" type="button">Unpin all</button>
   </div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
-
-  <section class="campaign" id="campaign" aria-label="Campaign">
-    <div class="campaign-kicker">CAMPAIGN</div>
+  <section class="ops" id="ops" aria-label="Generated campaign">
+    <div class="ops-head">
+      <label for="op-select">Campaign</label>
+      <select id="op-select"></select>
+      <span id="op-progress" class="ops-progress"></span>
+    </div>
+    <ol id="op-missions" class="ops-missions"></ol>
+  </section>
+  <details class="campaign" id="campaign">
+    <summary>Live war (campaign map)</summary>
     <h2 id="c-name">—</h2>
     <p class="campaign-line" id="c-fields"></p>
     <div class="campaign-sub">Front</div>
@@ -59,8 +84,8 @@
       <button id="btn-force" class="btn ghost" type="button" title="Apply the flight in progress, from what dcs.log shows so far">Apply now</button>
       <button id="btn-reset" class="btn ghost danger" type="button">Reset map</button>
     </div>
-  </section>
-</aside>
+  </details>
+</header>
 
 <main class="desk">
   <article class="doc" id="doc" aria-live="polite">

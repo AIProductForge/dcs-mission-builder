@@ -13,3 +13,4 @@ mission_builder.log
 # derived from Liberation campaigns at startup
 scenarios_cache.json
 campaign/
+campaigns_gen/

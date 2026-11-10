@@ -16,7 +16,8 @@ AD, _A = vehicles.AirDefence, vehicles.Armor
 SYSTEMS: dict[str, list] = {
     "SA-6": [AD.Kub_1S91_str, AD.Kub_2P25_ln, AD.Kub_2P25_ln, AD.Kub_2P25_ln],
     "Hawk": [AD.Hawk_sr, AD.Hawk_tr, AD.Hawk_ln, AD.Hawk_ln],
-    "SA-10": [AD.S_300PS_64H6E_sr, AD.S_300PS_40B6M_tr, AD.S_300PS_5P85C_ln, AD.S_300PS_54K6_cp,
+    # The command post before any launcher: DCS's track radar reportedly depends on it (forum topic 359102).
+    "SA-10": [AD.S_300PS_64H6E_sr, AD.S_300PS_40B6M_tr, AD.S_300PS_54K6_cp, AD.S_300PS_5P85C_ln,
               AD.S_300PS_5P85C_ln, AD.S_300PS_5P85D_ln, AD.S_300PS_5P85D_ln],
     "SA-11": [AD.SA_11_Buk_SR_9S18M1, AD.SA_11_Buk_LN_9A310M1, AD.SA_11_Buk_CC_9S470M1,
               AD.SA_11_Buk_LN_9A310M1, AD.SA_11_Buk_LN_9A310M1],
