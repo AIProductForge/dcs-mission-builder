@@ -1,6 +1,15 @@
 /* Campaign map page. Builds on app.css (tokens, panel, buttons, zones, events). */
-body.war { grid-template-columns: 380px 1fr; }
-.warpanel { padding-bottom: 28px; }
+/* The briefing page moved to one column with tabs (2026-11-01); this page keeps the side panel. */
+body.war { display: grid; grid-template-columns: 380px 1fr; min-height: 100vh; }
+.warpanel {
+  border-right: 1px solid var(--panel-line); border-bottom: 0; padding: 20px 18px 28px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+}
+.warpanel .tasking-head { display: block; }
+.tasking-kicker { font-family: var(--cond); letter-spacing: .18em; font-size: 12px; color: var(--accent); }
+.warpanel .campaign-actions { display: grid; grid-template-columns: 1fr 1fr; }
+.warpanel .btn.primary { grid-column: 1 / -1; }
+.warpanel .status { min-height: 3em; margin-top: 12px; }
 .warpanel a { color: var(--accent); }
 .field.nopin { grid-template-columns: 1fr; }
 .warpanel .campaign-sub { margin-top: 16px; }
