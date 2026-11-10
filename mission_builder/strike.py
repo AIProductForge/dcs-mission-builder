@@ -519,6 +519,7 @@ def build(spec: G.MissionSpec) -> tuple:
     m.coalition["blue"].bullseye = {"x": home.position.x, "y": home.position.y}
     b.bullseye = {"name": "BULLSEYE", **G._ll(home.position)}
     b.waypoints = G._route(player)
+    G.set_liveries(B)
     m.set_sortie_text(f"OPERATION {b.codename}")
     m.set_description_text(situation)
     m.set_description_bluetask_text(statement)

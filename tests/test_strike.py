@@ -94,6 +94,15 @@ class Stories(unittest.TestCase):
         self.assertFalse([c for c in success.rules if isinstance(c, G.condition.GroupDead)])
         self.assertIn("Watch buildings", [t.comment for t in m.triggerrules.triggers])
 
+    def test_f15e_flies_a_usaf_livery(self):
+        values = {"terrain": "PersianGulf", "aircraft": "F-15ESE", "mission_type": "Strike", "complexity": 3, "seed": 5}
+        spec = G.randomize(values, set(values), self.st.owned, self.st.terrains)
+        for build in (strike.build, lambda s: G.build(s)):
+            m, _ = build(spec)
+            player = next(g for g in m.coalition["blue"].countries[G.countries.CombinedJointTaskForcesBlue.name].plane_group
+                          if g.name == "Player Flight")
+            self.assertTrue(player.units[0].livery_id.startswith("usaf"), player.units[0].livery_id)
+
     def test_every_story_can_end(self):
         for story in strike.STORIES:
             m, _ = strike.build(spec_for(self.st, story, 3, 7))

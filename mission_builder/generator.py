@@ -1277,6 +1277,7 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
     if B.sc is None:
         b.notes.append("No scenario: objectives are placed next to an enemy airfield and may not match real territory.")
 
+    set_liveries(B)
     m.set_sortie_text(f"OPERATION {b.codename}")
     m.set_description_text(" ".join(b.situation))
     m.set_description_bluetask_text(b.mission_statement)
@@ -1315,10 +1316,29 @@ def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict],
         t.add_action(InlineDoScript(campaign.results_script(b.sortie, B.tracked_units)))
         m.triggerrules.triggers.append(t)
     m.coalition["blue"].bullseye = {"x": home.position.x, "y": home.position.y}
+    set_liveries(B)
     m.set_sortie_text("CAMPAIGN - SPECTATOR")
     m.set_description_text(f"The {spec.terrain} campaign as it stands: {len(ambient)} flights and "
                            f"{len(ground)} ground positions. No player aircraft: watch from the F10 map and views.")
     return m, b
+
+
+# Livery countries by side. The mission's countries are the Combined Joint Task Forces, which every
+# livery allows, so DCS's "default" is the first livery by name: for the F-15E that is the IDF one.
+LIVERY_COUNTRIES = {"blue": ("USA",), "red": ("RUS", "SUN")}
+
+
+def set_liveries(B: "_Builder") -> None:
+    """Give every aircraft group a livery of its side's main air force, one per group."""
+    for side, wanted in LIVERY_COUNTRIES.items():
+        for country in B.m.coalition[side].countries.values():
+            for g in country.plane_group + country.helicopter_group:
+                options = sorted(l.id for l in g.units[0].unit_type.iter_liveries()
+                                 if any(l.valid_for_country(c) for c in wanted) and l.countries)
+                if options:
+                    pick = B.rng.choice(options)
+                    for u in g.units:
+                        u.livery_id = pick
 
 
 def build_with_retries(spec: MissionSpec, locks: set[str], owned: list[str], terrains: list[str],
