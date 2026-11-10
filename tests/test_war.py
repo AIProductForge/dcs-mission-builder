@@ -82,6 +82,19 @@ class Engine(unittest.TestCase):
     def test_daily_missile_budget(self):
         self.assertLessEqual(self.w["missiles"]["fired"], war.MISSILES_PER_DAY)
 
+    def test_missions_get_better_salvo_odds(self):
+        hits = 0
+        for seed in range(40):
+            st, c, _ = fresh()
+            war.advance(c, 3600, random.Random(1))
+            w = c.data["war"]
+            w.pop("salvos", None)
+            w["clock"] = w["next_plan"] = 30 * 86400 + 4 * 3600
+            w["missiles_planned_until"] = w["clock"] - 1
+            war.plan_missiles_ahead(c, w["clock"], random.Random(seed), chance=war.MISSION_SALVO_CHANCE)
+            hits += bool(w.get("salvos"))
+        self.assertGreater(hits, 12)   # about half of 40; the normal odds at this hour are about 1 in 10
+
     def test_salvos_are_twenty_of_one_type(self):
         st, c, _ = fresh()
         war.advance(c, 3600, random.Random(1))

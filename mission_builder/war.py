@@ -127,6 +127,9 @@ DEEP_NEAR_FIELD = 80_000        # deep launchers are within this of a red airfie
 MISSILE_LAYOUT = 4              # bump when the placement rule changes: older campaigns' launch sites are moved
 DEEP_MISSILES = {"ballistic", "hypersonic"}   # launched from deep inside red territory
 SALVO_SIZE = 20
+# While a mission is being built, each planning step it covers fires a salvo this often if the
+# day's budget still has one (the user wants to see salvos when flying: 2026-11-09).
+MISSION_SALVO_CHANCE = 0.5
 MISSILES_PER_DAY = 5 * SALVO_SIZE   # five salvos a day
 MISSILE_TYPES = {
     "ballistic": {"label": "ballistic missile (Zolfaghar, Emad, Kheibar Shekan)", "speed": 1800, "share": 0.4,
@@ -630,7 +633,7 @@ def _parked_targets(c: Campaign, field: str, side: str) -> list[dict]:
             for sq in _war(c)["squadrons"] if sq["side"] == side and sq["base"] == field and on_ground(c, sq) > 0]
 
 
-def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
+def missile_tick(c: Campaign, t: float, rng: random.Random, chance: float | None = None) -> None:
     """Red's missile force at a planning step: maybe a salvo at a blue airfield, within the day's
     budget. Each weapon flies from its launcher at its type's speed (w["missile_flights"], drawn on
     the map); whether the air defence covering its target shoots it down is settled now, with the
@@ -646,9 +649,9 @@ def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
     targets_by_field = {n: v for n, v in targets_by_field.items() if v}
     if left < SALVO_SIZE or not launchers or not targets_by_field:
         return
-    # Spread the day's salvos over the steps left in it.
+    # Spread the day's salvos over the steps left in it, unless a mission asks for better odds.
     steps_left = max(1, (86400 - t % 86400) / PLAN_EVERY)
-    if rng.random() > min(1.0, (left // SALVO_SIZE) / steps_left):
+    if rng.random() > (chance if chance is not None else min(1.0, (left // SALVO_SIZE) / steps_left)):
         return
     field = rng.choice(list(targets_by_field))
     fxy = c.data["field_pos"][field]
@@ -697,7 +700,8 @@ def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
     w.setdefault("salvos", {})[str(salvo["id"])] = salvo
 
 
-def plan_missiles_ahead(c: Campaign, until: float, rng: random.Random | None = None) -> None:
+def plan_missiles_ahead(c: Campaign, until: float, rng: random.Random | None = None,
+                        chance: float | None = None) -> None:
     """Plan red's salvos for the planning steps up to `until` now (they're fixed from then on), so
     a mission built now can launch, in DCS, those that fall while it runs."""
     w = _war(c)
@@ -705,7 +709,7 @@ def plan_missiles_ahead(c: Campaign, until: float, rng: random.Random | None = N
     t = w["next_plan"]
     while t <= until:
         if t > w.get("missiles_planned_until", -1):
-            missile_tick(c, t, rng)
+            missile_tick(c, t, rng, chance)
             w["missiles_planned_until"] = t
         t += PLAN_EVERY
 
@@ -715,7 +719,7 @@ def missile_launches(c: Campaign, horizon: float = 5400) -> list[dict]:
     drones already on their way (placed in the air where they are). For generator.add_missiles."""
     w = _war(c)
     now = w["clock"]
-    plan_missiles_ahead(c, now + horizon)
+    plan_missiles_ahead(c, now + horizon, chance=MISSION_SALVO_CHANCE)   # steps not yet planned
     out = []
     for i, mf in enumerate(w.get("missile_flights", [])):
         if mf["done"] or mf["t1"] <= now or "xy0" not in mf:
