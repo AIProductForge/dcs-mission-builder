@@ -388,11 +388,12 @@ class State:
                 ground = war.ground_sites(c, f, ambient) + war.downed_pilots_ground(c)
                 launches = war.missile_launches(c)   # red's missiles and drones that fly during it
                 ground += war.missile_target_ground(c, launches, ground)
+                parked = war.parked_aircraft(c)   # every squadron's aircraft on its apron
                 try:
-                    mission, briefing = g.build(spec, ambient, ground, launches)
+                    mission, briefing = g.build(spec, ambient, ground, launches, parked)
                 except g.NoParkingSlotError:
                     spec.start = "In the air"
-                    mission, briefing = g.build(spec, ambient, ground, launches)
+                    mission, briefing = g.build(spec, ambient, ground, launches, parked)
                 self.current = (spec, mission, briefing)
                 saved = self.save()
                 if briefing.sortie:
@@ -487,7 +488,7 @@ class State:
                 ground = war.spectator_ground(c, ambient) + war.downed_pilots_ground(c)
                 launches = war.missile_launches(c)   # red's missiles and drones that fly during it
                 ground += war.missile_target_ground(c, launches, ground)
-                mission, briefing = g.build_spectator(spec, ambient, ground, launches)
+                mission, briefing = g.build_spectator(spec, ambient, ground, launches, war.parked_aircraft(c))
                 out_dir = Path(self.config["output_dir"])
                 out_dir.mkdir(parents=True, exist_ok=True)
                 path = out_dir / f"Watch_{theatre}_{war.clock_label(c).replace(' ', '_').replace(':', '')}.miz"

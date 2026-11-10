@@ -82,6 +82,71 @@ class Engine(unittest.TestCase):
     def test_daily_missile_budget(self):
         self.assertLessEqual(self.w["missiles"]["fired"], war.MISSILES_PER_DAY)
 
+    def test_salvos_are_twenty_of_one_type(self):
+        st, c, _ = fresh()
+        war.advance(c, 3600, random.Random(1))
+        w = c.data["war"]
+        day = 30 * 86400   # a fresh day's budget
+        for step in range(48):
+            war.missile_tick(c, day + step * war.PLAN_EVERY, random.Random(step))
+        new = [s for s in w.get("salvos", {}).values() if s["t"] >= day]
+        self.assertTrue(new)
+        self.assertLessEqual(len(new), war.MISSILES_PER_DAY // war.SALVO_SIZE)
+        for s in new:
+            self.assertEqual(len(s["fired"]), 1, s["fired"])
+            self.assertEqual(sum(s["fired"].values()), war.SALVO_SIZE)
+
+    def test_ballistic_salvos_can_hit_parked_aircraft(self):
+        st, c, _ = fresh()
+        war.advance(c, 3600, random.Random(1))
+        w = c.data["war"]
+        field = next(n for n in c.fields_of("blue") if war._parked_targets(c, n, "blue"))
+        target = war._parked_targets(c, field, "blue")[0]
+        sq = next(q for q in w["squadrons"] if war.PARKED + q["id"] == target["id"])
+        before = sq["total"]
+        w["salvo_seq"] = w.get("salvo_seq", 0) + 1
+        sid = str(w["salvo_seq"])
+        w.setdefault("salvos", {})[sid] = {"id": int(sid), "field": field, "t": w["clock"], "fired": {"ballistic": 1},
+                                          "down": 0, "hits": 0, "results": {}, "left": 1}
+        mf = {"salvo": int(sid), "type": "ballistic", "target": target["id"], "fate": "through", "t1": w["clock"]}
+
+        class Hit(random.Random):
+            def random(self):
+                return 0.0
+        war.missile_arrives(c, mf, Hit())
+        self.assertEqual(mf["fate"], "hit")
+        self.assertLess(sq["total"], before)
+        self.assertIn("on the ground", c.data["events"][-1]["text"])
+
+    def test_parked_aircraft_in_missions_are_statics_on_the_apron(self):
+        st, c, _ = fresh()
+        war.advance(c, 3600, random.Random(1))
+        parked = war.parked_aircraft(c)
+        self.assertTrue(parked)
+        res = st.spectate("PersianGulf")
+        m = G.Mission()
+        m.load_file(res["path"])
+        names = [u.name for k in m.coalition["blue"].countries.values() for g in k.static_group for u in g.units]
+        mine = [n for n in names if n.startswith("MBP:")]
+        self.assertTrue(mine)
+        self.assertLessEqual(len(mine), sum(p["count"] for p in parked if p["side"] == "blue"))
+        sortie = c.data["sorties"][-1]
+        self.assertTrue(set(mine) <= set(sortie.get("units", mine)))
+
+    def test_parked_kill_in_dcs_comes_back(self):
+        st, c, tmp = fresh()
+        war.advance(c, 3600, random.Random(1))
+        st.spectate("PersianGulf")
+        sortie = c.data["sorties"][-1]
+        sq = next(q for q in c.data["war"]["squadrons"] if q["side"] == "blue" and war.on_ground(c, q) > 0)
+        before = sq["total"]
+        (tmp / "logs" / "dcs.log").write_text(
+            f"x INFO SCRIPTING: MBRESULT|{sortie['id']}|START|5|0\n"
+            f"x INFO SCRIPTING: MBRESULT|{sortie['id']}|DEAD|MBP:{sq['id']}:1\n"
+            f"x INFO SCRIPTING: MBRESULT|{sortie['id']}|END|600\n", encoding="utf-8")
+        st.check_results()
+        self.assertEqual(sq["total"], before - 1)
+
     def test_awacs_up(self):
         self.assertTrue(any(f["mission"] == "AWACS" and f["side"] == "blue" for f in self.w["flights"]))
 
@@ -102,7 +167,7 @@ class Handoff(unittest.TestCase):
         (self.tmp / "logs" / "dcs.log").write_text(text + "\n", encoding="utf-8")
 
     def test_spectator_has_launchers_and_missiles_are_dcs_owned(self):
-        for _ in range(6):   # until some weapons fall in the mission's window
+        for _ in range(24):   # until some weapons fall in the mission's window (five salvos a day)
             if war.missile_launches(self.c):
                 break
             war.advance(self.c, self.w["clock"] + 3600, random.Random(1))

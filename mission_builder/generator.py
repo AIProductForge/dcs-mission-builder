@@ -496,6 +496,7 @@ class _Builder:
         self.n = 0  # unique-name counter
         self.tracked_units: list[str] = []  # units on campaign sites, named "MB:<site>:..."
         self.site_groups: dict[str, list] = {}  # campaign site id -> vehicle groups placed on it
+        self.parked_groups: list = []  # static aircraft placed by add_parked
         self.static_flags: list = []  # (static group, flag set by add_static_watch when it dies)
 
     def name(self, base: str) -> str:
@@ -803,6 +804,7 @@ def _follow_terrain(group) -> None:
 
 
 
+CRUISE_PER_CARRIER = 6
 # An Iskander fires about 55 s after its fire order is pushed (test E, 2026-10-29: 54-55 s each time).
 ISKANDER_SETUP = 55
 
@@ -820,20 +822,35 @@ def add_missiles(B: "_Builder", launches: list[dict]) -> None:
     activates the aircraft. Test E (2026-10-29) confirmed both: pushed orders fire (two salvos from one
     launcher too), about ISKANDER_SETUP seconds after the push; late-activated drones attack."""
     bombers: dict[tuple, list[dict]] = {}
+    aimed: dict[str, int] = {}
+
+    def aim_at(l_) -> Point:
+        """A unit of the target site, radars first, a different one per missile. Aiming at the site's
+        point instead put a 2026-11-09 Iskander 170 m from the nearest Hawk vehicle: nothing was damaged."""
+        units = [u for g_ in B.site_groups.get(l_.get("target") or "", []) for u in g_.units]
+        xy = Point(l_["xy1"][0], l_["xy1"][1], B.terrain)
+        if not units:
+            return xy
+        units.sort(key=lambda u: (weaponeering.target_class(u.type) != "radar", u.position.distance_to_point(xy)))
+        k = aimed.get(l_["target"], 0)
+        aimed[l_["target"]] = k + 1
+        p = units[k % len(units)].position
+        return Point(p.x, p.y, B.terrain)
+
     for n, l_ in enumerate(launches):
         start = Point(l_["start_xy"][0], l_["start_xy"][1], B.terrain)
-        aim = Point(l_["xy1"][0], l_["xy1"][1], B.terrain)
+        aim = aim_at(l_)
         if l_["type"] in ("ballistic", "hypersonic"):
             g = B.m.vehicle_group(B.red, B.name(f"Missile launcher {l_['salvo']}-{n}"), vehicles.MissilesSS.CHAP_9K720_HE,
                                   start, heading=start.heading_between_point(aim), group_size=1)
-            g.add_trigger_action(task.FireAtPoint(Point(aim.x, aim.y, B.terrain), rounds=1, radius=100))
+            g.add_trigger_action(task.FireAtPoint(Point(aim.x, aim.y, B.terrain), rounds=1, radius=10))
             t = TriggerOnce(comment=f"Missile launch {l_['salvo']}-{n}")
             # The order goes out early by the launcher's set-up time, so it fires at the campaign's time.
             t.add_condition(condition.TimeAfter(max(1, l_["delay"] - ISKANDER_SETUP)))
             t.add_action(action.AITaskPush(g.id, 1))
             B.m.triggerrules.triggers.append(t)
         elif l_["type"] == "cruise":
-            bombers.setdefault((l_["salvo"], l_["launcher"]), []).append(l_)
+            bombers.setdefault((l_["salvo"], l_["launcher"]), []).append((l_, aim))
         else:   # drone
             ut = planes.WingLoong_I
             g = B.m.flight_group_inflight(B.red, B.name(f"Attack drone {l_['salvo']}-{n}"), ut, start, 2500, 250,
@@ -842,19 +859,20 @@ def add_missiles(B: "_Builder", launches: list[dict]) -> None:
             g.points[0].tasks.append(task.Bombing(Point(aim.x, aim.y, B.terrain), expend=task.Expend.One, group_attack=True))
             g.add_waypoint(start, 2500, 250, "HOME")
             _late(B, g, l_["delay"], f"Drone launch {l_['salvo']}-{n}")
-    for (salvo, _launcher), group in bombers.items():
-        first = group[0]
+    # A Tu-95MS stand-in carries six Kh-555, so a launch site's share of a 20-missile salvo needs several.
+    carriers = [(salvo, chunk) for (salvo, _launcher), group in bombers.items()
+                for chunk in (group[i:i + CRUISE_PER_CARRIER] for i in range(0, len(group), CRUISE_PER_CARRIER))]
+    for salvo, group in carriers:
+        first, aim = group[0]
         start = Point(first["start_xy"][0], first["start_xy"][1], B.terrain)
         ut = planes.plane_map["Tu-95MS"]
         g = B.m.flight_group_inflight(B.red, B.name(f"Cruise missile carrier {salvo}"), ut, start, 9000, 700,
                                       maintask=_main_task(ut, "Strike"), group_size=1)
         _arm(g, ut, "Strike", _main_task(ut, "Strike"), "STRIKE")
-        for l_ in group:
-            g.points[0].tasks.append(task.Bombing(Point(l_["xy1"][0], l_["xy1"][1], B.terrain), expend=task.Expend.One,
-                                                  group_attack=True))
-        aim = Point(first["xy1"][0], first["xy1"][1], B.terrain)
+        for _l, unit_aim in group:
+            g.points[0].tasks.append(task.Bombing(unit_aim, expend=task.Expend.One, group_attack=True))
         g.add_waypoint(start.point_from_heading(aim.heading_between_point(start), 80_000), 9000, 700, "HOME")
-        _late(B, g, min(l_["delay"] for l_ in group), f"Cruise missile launch {salvo}")
+        _late(B, g, min(l_["delay"] for l_, _a in group), f"Cruise missile launch {salvo}")
     if launches:
         kinds: dict[str, int] = {}
         for l_ in launches:
@@ -873,6 +891,40 @@ def _late(B: "_Builder", g, delay: float, comment: str) -> None:
     t.add_condition(condition.TimeAfter(max(1, delay)))
     t.add_action(action.ActivateGroup(g.id))
     B.m.triggerrules.triggers.append(t)
+
+
+def add_parked(B: "_Builder", parked: list[dict]) -> None:
+    """The campaign's squadrons' aircraft on the ground, as static aircraft on their airfields'
+    parking spots (statics cost DCS far less than parked AI aircraft). Named MBP:<squadron>:n, so a
+    missile or bomb that destroys one comes back to the campaign; registered as the squadron's
+    PARKED target so missiles aim at them. A field that runs out of spots takes what fits.
+    Squadrons sharing a field take turns, one aircraft each, biggest type first in each turn, so
+    fighters don't fill the only spots a B-52 or E-3 fits and no squadron is left off a small field."""
+    def footprint(p):
+        t = unit_type(p["type"])
+        return (bool(getattr(t, "large_parking_slot", False)), (getattr(t, "length", 0) or 0) * (getattr(t, "width", 0) or 0))
+    queue = [p for p in sorted(parked, key=footprint, reverse=True) if p["base"] in B.terrain.airports]
+    placed: dict[str, list] = {p["id"]: [] for p in queue}
+    while queue:
+        for p in list(queue):
+            field_ = B.terrain.airports[p["base"]]
+            ptype = unit_type(p["type"])
+            slot = field_.free_parking_slot(ptype)
+            groups = placed[p["id"]]
+            if slot is None or len(groups) >= p["count"]:
+                queue.remove(p)
+                continue
+            country = B.blue if p["side"] == "blue" else B.red
+            g = B.m.static_group(country, B.name(f"Parked {p['type']} {p['id']}"), ptype, slot.position,
+                                 heading=getattr(slot, "heading", 0) or 0)
+            slot.unit_id = g.units[0].id
+            g.units[0].name = f"MBP:{p['id']}:{len(groups) + 1}"
+            B.tracked_units.append(g.units[0].name)
+            groups.append(g)
+    for sid, groups in placed.items():
+        if groups:
+            B.site_groups[f"PARKED:{sid}"] = groups
+            B.parked_groups += groups
 
 
 def add_ground(B: "_Builder", sites: list[dict]) -> None:
@@ -912,7 +964,8 @@ def add_ground(B: "_Builder", sites: list[dict]) -> None:
 
 
 def build(spec: MissionSpec, ambient: list[dict] | None = None,
-          ground: list[dict] | None = None, missiles: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
+          ground: list[dict] | None = None, missiles: list[dict] | None = None,
+          parked: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
     """Build a mission. `ambient`: the campaign's other flights (see war.ambient_flights);
     `ground`: campaign sites to place around the route (see war.ground_sites)."""
     B = _Builder(spec)
@@ -1239,6 +1292,8 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
     if spec.spawn_xy:
         b.notes.append("You join this flight in the air, where the campaign map shows it."
                        + (" Its target is behind it: recover to base." if spec.rtb else ""))
+    if parked:
+        add_parked(B, parked)
     if missiles:
         add_missiles(B, missiles)
     if ambient:
@@ -1285,7 +1340,7 @@ def build(spec: MissionSpec, ambient: list[dict] | None = None,
 
 
 def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict],
-                    missiles: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
+                    missiles: list[dict] | None = None, parked: list[dict] | None = None) -> tuple[Mission, "Briefing"]:
     """A mission with no player aircraft: the campaign's flights and ground forces as they are
     at spec's date and time. DCS opens it in spectator mode. Results come back like any other."""
     B = _Builder(spec)
@@ -1297,6 +1352,7 @@ def build_spectator(spec: MissionSpec, ambient: list[dict], ground: list[dict],
                        loadout="", stores=[], home={"name": home.name, **_ll(home.position)},
                        objective={"name": "", **_ll(home.position), "brg": 0, "dist_nm": 0}, enemy_field="")
     add_ground(B, ground)
+    add_parked(B, parked or [])
     add_missiles(B, missiles or [])
     add_ambient(B, ambient)
     if B.sc:
@@ -1332,8 +1388,9 @@ def set_liveries(B: "_Builder") -> None:
     """Give every aircraft group a livery of its side's main air force, one per group."""
     for side, wanted in LIVERY_COUNTRIES.items():
         for country in B.m.coalition[side].countries.values():
-            for g in country.plane_group + country.helicopter_group:
-                options = sorted(l.id for l in g.units[0].unit_type.iter_liveries()
+            for g in country.plane_group + country.helicopter_group + [s for s in B.parked_groups
+                                                                       if s in country.static_group]:
+                options = sorted(l.id for l in unit_type(g.units[0].type).iter_liveries()
                                  if any(l.valid_for_country(c) for c in wanted) and l.countries)
                 if options:
                     pick = B.rng.choice(options)

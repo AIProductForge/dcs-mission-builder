@@ -116,7 +116,8 @@ LOSS_COST = 0.6                 # how much one expected aircraft lost weighs aga
 # Stand-off weapons that outrange the big SAMs, and how far from the target they're released.
 LONG_STANDOFF = {"AGM-86": 400_000, "AGM-158": 250_000, "Kh-59": 150_000, "AGM-154": 110_000, "Kh-31": 90_000}
 # Red's missile force: launch sites dispersed through red territory that fire salvos through the
-# day, up to MISSILES_PER_DAY in all, never running out. Per type: what it is, share of launches,
+# day, up to MISSILES_PER_DAY in all, never running out. A salvo is SALVO_SIZE weapons of one type
+# (the user's call, 2026-11-09: Iran launches drones, ballistic and cruise missiles 20 at a time). Per type: what it is, share of launches,
 # the launch site's system (systems.py), reach, chance a missile that gets through hits its target,
 # and the chance each covering blue air defence site (by role, at full strength) shoots one down.
 # Estimates: Hawks and Vulcans stop slow drones and cruise missiles far better than ballistic ones,
@@ -125,8 +126,8 @@ MISSILE_SITES = 24
 DEEP_NEAR_FIELD = 80_000        # deep launchers are within this of a red airfield (inland bases)
 MISSILE_LAYOUT = 4              # bump when the placement rule changes: older campaigns' launch sites are moved
 DEEP_MISSILES = {"ballistic", "hypersonic"}   # launched from deep inside red territory
-MISSILES_PER_DAY = 50
-SALVO_CHANCE = 0.35             # per planning step (every PLAN_EVERY), while the day's budget lasts
+SALVO_SIZE = 20
+MISSILES_PER_DAY = 5 * SALVO_SIZE   # five salvos a day
 MISSILE_TYPES = {
     "ballistic": {"label": "ballistic missile (Zolfaghar, Emad, Kheibar Shekan)", "speed": 1800, "share": 0.4,
                   "system": "Ballistic missile battery", "reach": 1_500_000, "hit": 0.35,
@@ -150,7 +151,11 @@ MISSILE_TYPES = {
 # dispersed firing point on the way (a TEL moved forward), which is where the map and DCS show it leave.
 DCS_BALLISTIC_REACH = 370_000
 MISSILE_SHOW = 15 * 60          # a finished weapon's end (shot down, hit, miss) stays on the map this long
-MISSILE_TARGET_WEIGHT = {"sam": 3.0, "ewr": 2.0, "shorad": 1.5}
+MISSILE_TARGET_WEIGHT = {"sam": 3.0, "ewr": 2.0, "shorad": 1.5, "aircraft": 3.0}
+# Ballistic and hypersonic missiles can go for a squadron's aircraft parked on its airfield's apron
+# as well as its sites: target id PARKED + squadron id. A hit destroys one or two aircraft.
+PARKED = "PARKED:"
+PARKED_KILLS = (1, 1, 2)
 MISSION_FOR_ROLE = {"sam": "SEAD", "ewr": "SEAD", "structure": "Strike", "missile": "Strike",
                     "armor": "CAS", "shorad": "CAS", "farp": "Strike"}
 
@@ -600,6 +605,31 @@ def _missile_spots(c: Campaign, n: int, rng: random.Random | None = None) -> lis
     return out
 
 
+def on_ground(c: Campaign, sq: dict, horizon: float = 0.0) -> int:
+    """A squadron's aircraft on its apron: all of them but those airborne, or taking off within `horizon`."""
+    w = _war(c)
+    up = sum(f["count"] for f in w["flights"] if f["squadron"] == sq["id"] and f["count"] > 0
+             and (f["status"] == "airborne" or (f["status"] == "planned" and f["takeoff"] <= w["clock"] + horizon)))
+    return max(0, sq["total"] - up)
+
+
+def parked_aircraft(c: Campaign, horizon: float = 5400) -> list[dict]:
+    """Every squadron's aircraft on the ground at its base, for a mission (generator.add_parked)."""
+    out = []
+    for sq in _war(c)["squadrons"]:
+        n = on_ground(c, sq, horizon)
+        if n and sq["base"] in c.data["field_pos"] and c.data["fields"].get(sq["base"]) == sq["side"]:
+            out.append({"id": sq["id"], "side": sq["side"], "type": sq["type"], "heli": sq["heli"],
+                        "base": sq["base"], "count": n})
+    return out
+
+
+def _parked_targets(c: Campaign, field: str, side: str) -> list[dict]:
+    fx, fy = c.data["field_pos"][field]
+    return [{"id": PARKED + sq["id"], "role": "aircraft", "x": fx, "y": fy}
+            for sq in _war(c)["squadrons"] if sq["side"] == side and sq["base"] == field and on_ground(c, sq) > 0]
+
+
 def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
     """Red's missile force at a planning step: maybe a salvo at a blue airfield, within the day's
     budget. Each weapon flies from its launcher at its type's speed (w["missile_flights"], drawn on
@@ -614,28 +644,31 @@ def missile_tick(c: Campaign, t: float, rng: random.Random) -> None:
     launchers = [s for s in c.alive_sites("red") if s.get("missile_type")]
     targets_by_field = {n: [s for s in c.alive_sites("blue") if s["zone"] == n] for n in c.fields_of("blue")}
     targets_by_field = {n: v for n, v in targets_by_field.items() if v}
-    if left <= 0 or not launchers or not targets_by_field or rng.random() > SALVO_CHANCE:
+    if left < SALVO_SIZE or not launchers or not targets_by_field:
         return
-    # Spread the day's budget over the steps left in it.
+    # Spread the day's salvos over the steps left in it.
     steps_left = max(1, (86400 - t % 86400) / PLAN_EVERY)
-    size = max(1, min(left, round(rng.gauss(left / (steps_left * SALVO_CHANCE), 2))))
+    if rng.random() > min(1.0, (left // SALVO_SIZE) / steps_left):
+        return
     field = rng.choice(list(targets_by_field))
     fxy = c.data["field_pos"][field]
+    ready = [l_ for l_ in launchers if _dist((l_["x"], l_["y"]), fxy) <= MISSILE_TYPES[l_["missile_type"]]["reach"]]
+    kinds = sorted({l_["missile_type"] for l_ in ready})
+    if not kinds:
+        return
+    kind_name = rng.choices(kinds, [MISSILE_TYPES[k]["share"] for k in kinds])[0]
+    kind = MISSILE_TYPES[kind_name]
+    ready = [l_ for l_ in ready if l_["missile_type"] == kind_name]
     sites = targets_by_field[field]
+    if kind_name in DEEP_MISSILES:   # the apron is a target too
+        sites = sites + _parked_targets(c, field, "blue")
     cover = [s for s in c.alive_sites("blue") if s["role"] in ("sam", "shorad") and site_ranges(s)[0]
              and _dist((s["x"], s["y"]), fxy) <= site_ranges(s)[0] + 5_000]
     w["salvo_seq"] = w.get("salvo_seq", 0) + 1
     salvo = {"id": w["salvo_seq"], "field": field, "t": t, "fired": {}, "down": 0, "hits": 0, "results": {}, "left": 0}
     flights = w.setdefault("missile_flights", [])
-    for _ in range(size):
-        ready = [l_ for l_ in launchers if _dist((l_["x"], l_["y"]), fxy) <= MISSILE_TYPES[l_["missile_type"]]["reach"]]
-        if not ready:
-            break
-        weights = [MISSILE_TYPES[l_["missile_type"]]["share"] / sum(1 for x in ready if x["missile_type"] == l_["missile_type"])
-                   * l_.get("strength", 1.0) for l_ in ready]
-        launcher = rng.choices(ready, weights)[0]
-        kind_name = launcher["missile_type"]
-        kind = MISSILE_TYPES[kind_name]
+    for _ in range(SALVO_SIZE):
+        launcher = rng.choices(ready, [l_.get("strength", 1.0) for l_ in ready])[0]
         target = rng.choices(sites, [MISSILE_TARGET_WEIGHT.get(s["role"], 1.0) for s in sites])[0]
         a, b_ = (launcher["x"], launcher["y"]), (target["x"] + rng.uniform(-300, 300), target["y"] + rng.uniform(-300, 300))
         if kind_name in DEEP_MISSILES and _dist(a, b_) > DCS_BALLISTIC_REACH:   # a TEL moved forward
@@ -726,12 +759,20 @@ def missile_arrives(c: Campaign, mf: dict, rng: random.Random) -> None:
     kind = MISSILE_TYPES[mf["type"]]
     t = mf["t1"]
     target = next((s for s in c.data["sites"] if s["id"] == mf["target"]), None)
+    sq = next((q for q in w["squadrons"] if PARKED + q["id"] == mf["target"]), None)
     m = w["missiles"]
     if mf.get("dcs_flown"):   # flown in DCS: what it hit came back with the mission's results
         mf["fate"] = "flown in DCS"
     elif mf["fate"] == "down":
         salvo["down"] += 1
         m["down"] = m.get("down", 0) + 1
+    elif sq and on_ground(c, sq) > 0 and rng.random() < kind["hit"]:
+        mf["fate"] = "hit"
+        salvo["hits"] += 1
+        m["hits"] = m.get("hits", 0) + 1
+        n = min(on_ground(c, sq), rng.choice(PARKED_KILLS))
+        sq["total"] -= n
+        salvo["results"][mf["target"]] = salvo["results"].get(mf["target"], 0) + n
     elif target and target["alive"] and rng.random() < kind["hit"]:
         mf["fate"] = "hit"
         salvo["hits"] += 1
@@ -760,7 +801,9 @@ def missile_arrives(c: Campaign, mf: dict, rng: random.Random) -> None:
         return
     n = sum(salvo["fired"].values())
     by_id = {s["id"]: s for s in c.data["sites"]}
-    done = [f"{v} {_role_name(by_id[k])}" for k, v in salvo["results"].items()]
+    squadrons = {PARKED + q["id"]: q for q in w["squadrons"]}
+    done = [f"{v} {_role_name(by_id[k])}" if k in by_id
+            else f"destroyed {v} {squadrons[k]['type']} on the ground" for k, v in salvo["results"].items()]
     what = ", ".join(f"{k_n} {MISSILE_TYPES[k]['label'].split(' (')[0]}{'s' if k_n > 1 else ''}"
                      for k, k_n in sorted(salvo["fired"].items(), key=lambda x: -x[1]))
     text = (f"Missile strike on {salvo['field']}: {n} launched ({what}); {salvo['down']} shot down, {salvo['hits']} hit"
@@ -1739,10 +1782,20 @@ def after_sortie(c: Campaign, sortie: dict, dead_units: set[str], flown: float =
     w = _war(c)
     report = report or {}
     lost: dict[str, int] = {}
+    parked_lost: dict[str, int] = {}
     for u in dead_units:
         if u.startswith("MBF:"):
             fid = u.split(":")[1]
             lost[fid] = lost.get(fid, 0) + 1
+        elif u.startswith("MBP:"):   # an aircraft parked on its apron (generator.add_parked)
+            sid = u.split(":")[1]
+            parked_lost[sid] = parked_lost.get(sid, 0) + 1
+    for sq in w["squadrons"]:
+        n = min(parked_lost.get(sq["id"], 0), sq["total"])
+        if n:
+            sq["total"] -= n
+            c.log(f"{clock_label(c)} · {n} {sq['type']} destroyed on the ground at {sq['base']} (in DCS).",
+                  side=sq["side"], t=w["clock"])
     mine = next((f for f in w["flights"] if f["id"] == sortie.get("flight")), None)
     friendly_lost = enemy_lost = 0
     for f in w["flights"]:

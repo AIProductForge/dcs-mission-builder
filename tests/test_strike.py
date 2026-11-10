@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 logging.disable(logging.ERROR)
 from dcs.mission import Mission  # noqa: E402
-from mission_builder import campaign, server, strike  # noqa: E402
+from mission_builder import campaign, server, strike, weaponeering as W  # noqa: E402
 from mission_builder import generator as G  # noqa: E402
 
 server.save_config = lambda c: None
@@ -102,6 +102,30 @@ class Stories(unittest.TestCase):
             player = next(g for g in m.coalition["blue"].countries[G.countries.CombinedJointTaskForcesBlue.name].plane_group
                           if g.name == "Player Flight")
             self.assertTrue(player.units[0].livery_id.startswith("usaf"), player.units[0].livery_id)
+
+    def test_ballistic_missiles_aim_at_units_radars_first(self):
+        values = {"terrain": "PersianGulf", "aircraft": "F-16C_50", "mission_type": "Strike", "complexity": 1, "seed": 3}
+        spec = G.randomize(values, set(values), self.st.owned, self.st.terrains)
+        kish = G.TERRAINS["PersianGulf"]().airports["Kish Intl"].position
+        site = {"id": "B68", "side": "blue", "role": "sam", "x": kish.x + 300, "y": kish.y + 200, "zone": "Kish Intl"}
+        launch = {"type": "ballistic", "salvo": 9, "launcher": "R1", "delay": 400, "target": "B68",
+                  "start_xy": [kish.x + 250000, kish.y + 50000], "xy1": [site["x"], site["y"]]}
+        m, _ = G.build(spec, ground=[site], missiles=[launch, dict(launch, launcher="R2")])
+        units = {(round(u.position.x), round(u.position.y)): u.type for c in m.coalition.values()
+                 for k in c.countries.values() for g in k.vehicle_group if g.name.startswith("blue sam") for u in g.units}
+        aims = []
+        for c in m.coalition.values():
+            for k in c.countries.values():
+                for g in k.vehicle_group:
+                    if g.name.startswith("Missile launcher"):
+                        p = next(t for t in g.tasks if type(t).__name__ == "FireAtPoint").params
+                        aims.append((round(p["x"]), round(p["y"]), p["zoneRadius"]))
+        self.assertEqual(len(aims), 2)
+        self.assertNotEqual(aims[0][:2], aims[1][:2], "two missiles, two different units")
+        for x, y, radius in aims:
+            self.assertIn((x, y), units)
+            self.assertLessEqual(radius, 10)
+        self.assertEqual(W.target_class(units[aims[0][:2]]), "radar")
 
     def test_every_story_can_end(self):
         for story in strike.STORIES:
